@@ -1,303 +1,180 @@
 # cpmdisk
 
-A command-line tool for creating and managing CP/M disk images for the
-**Iskra Delta Partner** — a Z80-based personal computer manufactured in Yugoslavia
-in the 1980s.  It supports both the floppy disk (FDD) and hard disk (HDD)
-image formats used by the Partner's CP/M 2.2 operating system.
+`cpmdisk` is a command-line tool for creating and managing CP/M disk images used by the Iskra Delta Partner.
 
-The tool follows the same disk geometry definitions as
-[cpmtools](https://www.moria.de/~michael/cpmtools/), so images created here
-are compatible with cpmtools and any emulator that understands the raw sector
-format (e.g. RunCPM, MAME).
+It supports the Partner's known floppy and hard disk geometries and can also work with fully custom geometries when all required parameters are supplied.
 
----
+## Current scope
 
-## Features
+Implemented commands:
 
-| Command  | Description                                              |
-|----------|----------------------------------------------------------|
-| `create` | Create a blank FDD or HDD disk image                     |
-| `info`   | Show disk geometry, directory usage, and free space      |
-| `list`   | List files (optionally filtered by CP/M user area)       |
-| `add`    | Copy one or more host files into a user area on the disk |
-| `remove` | Delete files by wildcard pattern (`*` and `?` supported) |
+- `create`: create a blank disk image
+- `info`: show geometry and free-space statistics
+- `list`: list files (optionally by CP/M user area)
+- `add`: copy host files into a CP/M user area
+- `remove`: delete by wildcard pattern (`*`, `?`)
 
----
+Not implemented in this repository:
 
-## Disk types
+- file extraction back to host
+- file rename/copy within image
+- boot sector/system track tooling
 
-| Type  | cpmtools name | Tracks | Sec/trk | Sec size | Block size | Max dir | Boot trks | Image size |
-|-------|---------------|--------|---------|----------|------------|---------|-----------|------------|
-| `fdd` | `idpfdd`      | 146    | 18      | 256 B    | 2 048 B    | 128     | 2         | 657 KB     |
-| `hdd` | `idphdd`      | 1 224  | 32      | 256 B    | 4 096 B    | 1 024   | 1         | 9.6 MB     |
+## Disk formats
 
----
+Built-in named formats:
+
+| Type | Internal name | Tracks | Sec/trk | Sector size | Block size | Max dir | Boot trk | Size |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `fdd` | `idpfdd` | 146 | 18 | 256 | 2048 | 128 | 2 | 672,768 B |
+| `hdd` | `idphdd` | 1224 | 32 | 256 | 4096 | 1024 | 1 | 10,027,008 B |
 
 ## Requirements
 
-| Tool / Library | Version  | Notes                                  |
-|----------------|----------|----------------------------------------|
-| GCC            | ≥ 13     | C++23 required (`-std=gnu++23`)        |
-| CMake          | ≥ 3.26   |                                        |
-| CLI11          | 2.4.2    | Downloaded automatically via FetchContent |
-| git            | any      | Needed by FetchContent to fetch CLI11  |
+- CMake `>= 3.26`
+- C++23 compiler (`std::format` required; tested with GCC 13+)
+- `git` (used by CMake `FetchContent` to fetch CLI11)
 
----
+Dependency fetched automatically:
 
-## Building
+- [CLI11](https://github.com/CLIUtils/CLI11) `v2.4.2`
+
+## Build
 
 ```bash
-# 1. Clone the repository
-git clone <repo-url> idp-disk
-cd idp-disk
-
-# 2. Configure (Debug build by default)
 cmake -B build
-
-# 3. Build
-cmake --build build --parallel
-
-# The executable is placed in bin/cpmdisk
+cmake --build build -j4
 ./bin/cpmdisk --help
 ```
 
-To build a Release binary:
+Release build:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
+cmake --build build -j4
 ```
 
-To clean all build and output artifacts:
+## CLI overview
 
-```bash
-rm -rf build bin
-```
-
-### VS Code
-
-Open the repository folder in VS Code.
-
-| Action | Key / menu |
-|--------|-----------|
-| Build  | `Ctrl+Shift+B` (default build task) |
-| Debug  | `F5` — launches `cpmdisk create test.dsk fdd` under GDB |
-
-Three debug launch configurations are provided:
-- **create fdd** — create a blank FDD image as `test.dsk`
-- **list test.dsk** — list its contents
-- **info test.dsk** — show geometry and free-space statistics
-
----
-
-## Usage
-
-```
-cpmdisk <command> <disk.dsk> [options] [arguments]
+```text
+cpmdisk <command> <disk> [options]
 ```
 
 ### create
 
-Create a new, blank disk image.  The file must not already exist.
+Create a new blank disk image.
 
 ```bash
-cpmdisk create myboot.dsk fdd
-cpmdisk create harddisk.dsk hdd
+cpmdisk create boot.dsk fdd
+cpmdisk create hdd.dsk hdd
+```
+
+Custom geometry (type omitted):
+
+```bash
+cpmdisk create custom.dsk \
+  --seclen 256 --tracks 80 --sectrk 9 \
+  --blocksize 2048 --maxdir 64 --boottrk 2
 ```
 
 ### info
 
-Show geometry and allocation statistics for an existing image.
+Show geometry and allocation statistics.
 
 ```bash
-cpmdisk info myboot.dsk
+cpmdisk info boot.dsk
 ```
 
-Example output:
+If size auto-detection cannot identify the image, provide format or full geometry:
 
-```
-Disk image : myboot.dsk
-Disk type  : idpfdd
-
-Geometry
-  Tracks          : 146
-  Sectors / track : 18
-  Sector size     : 256 bytes
-  Boot tracks     : 2
-  Block size      : 2048 bytes
-  Total blocks    : 324
-  Directory blocks: 2
-  Disk size       : 672768 (657.0 KB)
-
-Directory
-  Capacity        : 128 entries
-  Used            : 3
-  Free            : 125
-
-Allocation
-  Total blocks    : 324
-  Used blocks     : 6
-  Free blocks     : 318
-  Free space      : 651264 (636.0 KB)
+```bash
+cpmdisk info custom.dsk -f fdd
+cpmdisk info custom.dsk --seclen 256 --tracks 80 --sectrk 9 --blocksize 2048 --maxdir 64 --boottrk 2
 ```
 
 ### list
 
-List all files on the disk.  Use `-u` to restrict to one CP/M user area.
+List files from all user areas, or a specific user area (`0-15`):
 
 ```bash
-cpmdisk list myboot.dsk          # all user areas
-cpmdisk list myboot.dsk -u 0     # user area 0 only
+cpmdisk list boot.dsk
+cpmdisk list boot.dsk -u 0
 ```
-
-Example output:
-
-```
-User  Name              Size
-----  ------------  ----------
-   0  COMMAND.COM       20 KB
-   0  AUTOEXEC.BAT       1 KB
-   3  HELLO.BAS        512 B
-
-3 file(s)
-```
-
-> **Note:** CP/M tracks file size to the nearest 128-byte record boundary.
-> The size shown may be up to 127 bytes larger than the actual host file size.
 
 ### add
 
-Copy one or more host files onto the disk.  Files are placed in the specified
-CP/M user area (default: 0).  Shell wildcards are expanded by the shell before
-the tool sees the arguments.
+Copy one or more host files into the disk.
 
 ```bash
-# Add a single file to user area 0
-cpmdisk add myboot.dsk COMMAND.COM
-
-# Add multiple files
-cpmdisk add myboot.dsk -u 0 *.com *.bas
-
-# Add to a different user area
-cpmdisk add myboot.dsk -u 3 myprog.com data.dat
+cpmdisk add boot.dsk COMMAND.COM
+cpmdisk add boot.dsk -u 3 MYPROG.COM DATA.DAT
 ```
-
-Filenames are converted to uppercase CP/M 8.3 format.  Names longer than
-8 characters or extensions longer than 3 characters are rejected.
 
 ### remove
 
-Delete files whose `NAME.EXT` matches one or more wildcard patterns.
-Matching is case-insensitive.  Use `-u` to restrict to one user area.
+Delete files by wildcard pattern (`*`, `?`), optionally restricted to one user area:
 
 ```bash
-# Remove a specific file from any user area
-cpmdisk remove myboot.dsk OLDFILE.COM
-
-# Remove all .COM files from user area 0
-cpmdisk remove myboot.dsk -u 0 '*.COM'
-
-# Remove by partial name with ? wildcard
-cpmdisk remove myboot.dsk 'TEST?.BAS'
-
-# Multiple patterns in one call
-cpmdisk remove myboot.dsk '*.BAK' '*.TMP'
+cpmdisk remove boot.dsk '*.BAK'
+cpmdisk remove boot.dsk -u 0 '*.COM'
 ```
 
-> Removal marks directory entries as deleted (user byte = 0xE5), which is
-> standard CP/M behaviour.  Data blocks are not zeroed and will be reclaimed
-> automatically when new files are added.
+## Geometry override options
 
----
+All commands support geometry overrides:
 
-## Integration with cpmtools
+- `--seclen`
+- `--tracks`
+- `--sectrk`
+- `--blocksize`
+- `--maxdir`
+- `--skew`
+- `--boottrk`
 
-Images created by `cpmdisk` can be used directly with
-[cpmtools](https://www.moria.de/~michael/cpmtools/).  Add the following
-definitions to your `diskdefs` file (usually `/etc/cpmtools/diskdefs` or
-`~/.cpmtools/diskdefs`):
+Rules:
 
-```
-diskdef idpfdd
-  seclen 256
-  tracks 146
-  sectrk 18
-  blocksize 2048
-  maxdir 128
-  skew 0
-  boottrk 2
-  os 3
-end
+- For `create`: provide either a named type (`fdd`/`hdd`) or all required geometry fields.
+- For `info/list/add/remove`: geometry is auto-detected by image size if no hint is supplied.
+- If auto-detection fails, use `-f/--format` or pass full geometry.
 
-diskdef idphdd
-  seclen 256
-  tracks 1224
-  sectrk 32
-  blocksize 4096
-  maxdir 1024
-  skew 0
-  boottrk 1
-  os 3
-end
-```
+## CP/M behavior notes
 
-Then you can use standard cpmtools commands:
+- Host filenames are converted to uppercase CP/M `8.3` names.
+- Name part longer than 8 characters or extension longer than 3 is rejected.
+- `list` sizes are reported in CP/M record units (128-byte granularity), so small files may appear rounded up.
+- `remove` marks directory entries as deleted (`0xE5`); data blocks are reclaimed by future allocations.
 
-```bash
-cpmls  -f idpfdd myboot.dsk
-cpmcp  -f idpfdd myboot.dsk 0:COMMAND.COM ./COMMAND.COM
-cpmdump -f idpfdd myboot.dsk | less
-```
+## cpmtools compatibility
 
----
+Disk geometry matches cpmtools-style diskdefs. Built-in names are:
 
-## Project structure
+- `idpfdd`
+- `idphdd`
 
-```
-idp-disk/
+`cpmdisk` format options accept short names (`fdd`, `hdd`) and full names (`idpfdd`, `idphdd`).
+
+## Project layout
+
+```text
+.
+├── CMakeLists.txt
+├── LICENSE
 ├── README.md
-├── .gitignore
-├── CMakeLists.txt            Project root: C++23 standard, bin/ output, CLI11, add_subdirectory(src)
-├── .vscode/
-│   ├── tasks.json            Build and clean tasks
-│   └── launch.json           Debug launch configurations
 └── src/
-    ├── CMakeLists.txt        Target definition only (add_executable + compile options)
-    ├── diskdef.h             Disk geometry constants and derived calculations
-    ├── direntry.h            CP/M 2.2 directory entry layout and helpers
-    ├── cpm_disk.h            CpmDisk class interface
-    ├── cpm_disk.cpp          Disk creation, I/O, and all commands
-    ├── print_compat.h        println() shim for GCC < 14
-    └── main.cpp              CLI entry point (CLI11)
+    ├── CMakeLists.txt
+    ├── main.cpp
+    ├── cpm_disk.h
+    ├── cpm_disk.cpp
+    ├── diskdef.h
+    ├── direntry.h
+    └── print_compat.h
 ```
-
-Build output:
-
-```
-build/    CMake intermediate files (safe to delete)
-bin/      Compiled executable: cpmdisk
-```
-
----
 
 ## License
 
-Copyright (C) 2024 Tomaž Štih and contributors.
+This project is licensed under GNU General Public License version 2 only.
+See [LICENSE](LICENSE).
 
-This program is free software; you can redistribute it and/or modify it under
-the terms of the **GNU General Public License version 2** as published by the
-Free Software Foundation.
+Third-party:
 
-This program is distributed in the hope that it will be useful, but **WITHOUT
-ANY WARRANTY**; without even the implied warranty of **MERCHANTABILITY** or
-**FITNESS FOR A PARTICULAR PURPOSE**.  See the GNU General Public License for
-more details.
-
-You should have received a copy of the GNU General Public License along with
-this program.  If not, see <https://www.gnu.org/licenses/old-licenses/gpl-2.0.html>.
-
-### Third-party components
-
-| Component | License    | URL                                        |
-|-----------|------------|--------------------------------------------|
-| CLI11     | BSD 3-Clause | https://github.com/CLIUtils/CLI11        |
+- CLI11: BSD-3-Clause
