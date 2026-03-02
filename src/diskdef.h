@@ -84,3 +84,40 @@ inline std::optional<DiskDef> diskdef_by_size(uint64_t size) noexcept {
     if (size == DISK_HDD.disk_size()) return DISK_HDD;
     return std::nullopt;
 }
+
+// ── Geometry overrides ────────────────────────────────────────────────────────
+//
+// Holds optional per-field overrides that can be applied on top of any DiskDef.
+// Unset fields (std::nullopt) leave the base definition unchanged.
+
+struct GeoOpts {
+    std::optional<uint32_t> seclen;
+    std::optional<uint32_t> tracks;
+    std::optional<uint32_t> sectrk;
+    std::optional<uint32_t> blocksize;
+    std::optional<uint32_t> maxdir;
+    std::optional<uint32_t> skew;
+    std::optional<uint32_t> boottrk;
+
+    bool any() const noexcept {
+        return seclen || tracks || sectrk || blocksize || maxdir || skew || boottrk;
+    }
+
+    // True when every field needed to describe a disk from scratch is set.
+    // (skew is optional – it defaults to 0.)
+    bool all_required() const noexcept {
+        return seclen && tracks && sectrk && blocksize && maxdir && boottrk;
+    }
+
+    // Apply the set fields to `def`, marking the name as "custom" if anything changed.
+    void apply_to(DiskDef& def) const noexcept {
+        if (seclen)    def.seclen    = *seclen;
+        if (tracks)    def.tracks    = *tracks;
+        if (sectrk)    def.sectrk    = *sectrk;
+        if (blocksize) def.blocksize = *blocksize;
+        if (maxdir)    def.maxdir    = *maxdir;
+        if (skew)      def.skew      = *skew;
+        if (boottrk)   def.boottrk   = *boottrk;
+        if (any())     def.name      = "custom";
+    }
+};

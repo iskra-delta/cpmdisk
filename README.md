@@ -1,4 +1,4 @@
-# idpdisk
+# cpmdisk
 
 A command-line tool for creating and managing CP/M disk images for the
 **Iskra Delta Partner** — a Z80-based personal computer manufactured in Yugoslavia
@@ -57,8 +57,8 @@ cmake -B build
 # 3. Build
 cmake --build build --parallel
 
-# The executable is placed in bin/idpdisk
-./bin/idpdisk --help
+# The executable is placed in bin/cpmdisk
+./bin/cpmdisk --help
 ```
 
 To build a Release binary:
@@ -81,7 +81,7 @@ Open the repository folder in VS Code.
 | Action | Key / menu |
 |--------|-----------|
 | Build  | `Ctrl+Shift+B` (default build task) |
-| Debug  | `F5` — launches `idpdisk create test.dsk fdd` under GDB |
+| Debug  | `F5` — launches `cpmdisk create test.dsk fdd` under GDB |
 
 Three debug launch configurations are provided:
 - **create fdd** — create a blank FDD image as `test.dsk`
@@ -93,7 +93,7 @@ Three debug launch configurations are provided:
 ## Usage
 
 ```
-idpdisk <command> <disk.dsk> [options] [arguments]
+cpmdisk <command> <disk.dsk> [options] [arguments]
 ```
 
 ### create
@@ -101,8 +101,8 @@ idpdisk <command> <disk.dsk> [options] [arguments]
 Create a new, blank disk image.  The file must not already exist.
 
 ```bash
-idpdisk create myboot.dsk fdd
-idpdisk create harddisk.dsk hdd
+cpmdisk create myboot.dsk fdd
+cpmdisk create harddisk.dsk hdd
 ```
 
 ### info
@@ -110,7 +110,7 @@ idpdisk create harddisk.dsk hdd
 Show geometry and allocation statistics for an existing image.
 
 ```bash
-idpdisk info myboot.dsk
+cpmdisk info myboot.dsk
 ```
 
 Example output:
@@ -146,8 +146,8 @@ Allocation
 List all files on the disk.  Use `-u` to restrict to one CP/M user area.
 
 ```bash
-idpdisk list myboot.dsk          # all user areas
-idpdisk list myboot.dsk -u 0     # user area 0 only
+cpmdisk list myboot.dsk          # all user areas
+cpmdisk list myboot.dsk -u 0     # user area 0 only
 ```
 
 Example output:
@@ -173,13 +173,13 @@ the tool sees the arguments.
 
 ```bash
 # Add a single file to user area 0
-idpdisk add myboot.dsk COMMAND.COM
+cpmdisk add myboot.dsk COMMAND.COM
 
 # Add multiple files
-idpdisk add myboot.dsk -u 0 *.com *.bas
+cpmdisk add myboot.dsk -u 0 *.com *.bas
 
 # Add to a different user area
-idpdisk add myboot.dsk -u 3 myprog.com data.dat
+cpmdisk add myboot.dsk -u 3 myprog.com data.dat
 ```
 
 Filenames are converted to uppercase CP/M 8.3 format.  Names longer than
@@ -192,16 +192,16 @@ Matching is case-insensitive.  Use `-u` to restrict to one user area.
 
 ```bash
 # Remove a specific file from any user area
-idpdisk remove myboot.dsk OLDFILE.COM
+cpmdisk remove myboot.dsk OLDFILE.COM
 
 # Remove all .COM files from user area 0
-idpdisk remove myboot.dsk -u 0 '*.COM'
+cpmdisk remove myboot.dsk -u 0 '*.COM'
 
 # Remove by partial name with ? wildcard
-idpdisk remove myboot.dsk 'TEST?.BAS'
+cpmdisk remove myboot.dsk 'TEST?.BAS'
 
 # Multiple patterns in one call
-idpdisk remove myboot.dsk '*.BAK' '*.TMP'
+cpmdisk remove myboot.dsk '*.BAK' '*.TMP'
 ```
 
 > Removal marks directory entries as deleted (user byte = 0xE5), which is
@@ -212,7 +212,7 @@ idpdisk remove myboot.dsk '*.BAK' '*.TMP'
 
 ## Integration with cpmtools
 
-Images created by `idpdisk` can be used directly with
+Images created by `cpmdisk` can be used directly with
 [cpmtools](https://www.moria.de/~michael/cpmtools/).  Add the following
 definitions to your `diskdefs` file (usually `/etc/cpmtools/diskdefs` or
 `~/.cpmtools/diskdefs`):
@@ -275,7 +275,7 @@ Build output:
 
 ```
 build/    CMake intermediate files (safe to delete)
-bin/      Compiled executable: idpdisk
+bin/      Compiled executable: cpmdisk
 ```
 
 ---

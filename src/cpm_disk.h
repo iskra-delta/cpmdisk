@@ -27,8 +27,11 @@ public:
     // Create a new, blank disk image (filled with 0x00; directory with 0xE5).
     static CpmDisk create(const std::filesystem::path& path, const DiskDef& def);
 
-    // Open an existing disk image; disk type is inferred from the file size.
-    static CpmDisk open(const std::filesystem::path& path);
+    // Open an existing disk image.
+    // If `hint` is provided it is used directly; otherwise the type is inferred
+    // from the file size.  Throws if auto-detection fails and no hint is given.
+    static CpmDisk open(const std::filesystem::path& path,
+                        std::optional<DiskDef>        hint = std::nullopt);
 
     // ── Commands ──────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.26)
-project(idpdisk LANGUAGES CXX)
+project(cpmdisk LANGUAGES CXX)
 
 # ── Language standard ─────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 23)

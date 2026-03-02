@@ -110,23 +110,32 @@ CpmDisk CpmDisk::create(const std::filesystem::path& path, const DiskDef& def) {
         }
     }
 
-    // Open and initialise the directory area with 0xE5 (free entry marker).
+    // Fill the entire physical directory allocation with 0xE5 (free entry marker).
+    // We fill dir_blocks() * blocksize bytes, not just maxdir * 32 bytes, so that
+    // any unoccupied space in the last directory block is also marked free.  This
+    // prevents spurious "used" entries if the disk is later opened with a larger
+    // maxdir (e.g. when overriding a standard type).
     CpmDisk disk(path, def);
-    std::vector<DirEntry> dir(def.maxdir);
-    std::memset(dir.data(), 0xE5, def.maxdir * sizeof(DirEntry));
-    disk.write_dir(dir);
+    uint64_t dir_area = uint64_t(def.dir_blocks()) * def.blocksize;
+    std::vector<uint8_t> e5(dir_area, 0xE5u);
+    disk.file_.seekp(std::streamoff(def.block_offset(0)));
+    disk.file_.write(reinterpret_cast<const char*>(e5.data()), std::streamsize(dir_area));
+    disk.file_.flush();
     return disk;
 }
 
 // ── Factory: open ─────────────────────────────────────────────────────────────
 
-CpmDisk CpmDisk::open(const std::filesystem::path& path) {
-    auto sz = std::filesystem::file_size(path);
+CpmDisk CpmDisk::open(const std::filesystem::path& path, std::optional<DiskDef> hint) {
+    if (hint)
+        return CpmDisk(path, *hint);
+
+    auto sz  = std::filesystem::file_size(path);
     auto opt = diskdef_by_size(sz);
     if (!opt)
         throw std::runtime_error(std::format(
-            "'{}': unknown disk size {} bytes (expected {} for fdd or {} for hdd)",
-            path.string(), sz, DISK_FDD.disk_size(), DISK_HDD.disk_size()));
+            "'{}': unrecognised disk size {} bytes – use -f/--format or geometry flags",
+            path.string(), sz));
     return CpmDisk(path, *opt);
 }
 

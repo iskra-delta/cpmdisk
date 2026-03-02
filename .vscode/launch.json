@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "idpdisk – create fdd",
+            "name": "cpmdisk – create fdd",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/idpdisk",
+            "program": "${workspaceFolder}/bin/cpmdisk",
             "args": ["create", "test.dsk", "fdd"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
@@ -22,10 +22,10 @@
             "preLaunchTask": "cmake-build"
         },
         {
-            "name": "idpdisk – list test.dsk",
+            "name": "cpmdisk – list test.dsk",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/idpdisk",
+            "program": "${workspaceFolder}/bin/cpmdisk",
             "args": ["list", "test.dsk"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
@@ -42,10 +42,10 @@
             "preLaunchTask": "cmake-build"
         },
         {
-            "name": "idpdisk – info test.dsk",
+            "name": "cpmdisk – info test.dsk",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/idpdisk",
+            "program": "${workspaceFolder}/bin/cpmdisk",
             "args": ["info", "test.dsk"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
