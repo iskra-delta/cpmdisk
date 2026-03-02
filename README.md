@@ -52,7 +52,7 @@ git clone <repo-url> idp-disk
 cd idp-disk
 
 # 2. Configure (Debug build by default)
-cmake -S src -B build
+cmake -B build
 
 # 3. Build
 cmake --build build --parallel
@@ -64,7 +64,7 @@ cmake --build build --parallel
 To build a Release binary:
 
 ```bash
-cmake -S src -B build -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
@@ -257,17 +257,18 @@ cpmdump -f idpfdd myboot.dsk | less
 idp-disk/
 ├── README.md
 ├── .gitignore
+├── CMakeLists.txt            Project root: C++23 standard, bin/ output, CLI11, add_subdirectory(src)
 ├── .vscode/
-│   ├── tasks.json        Build and clean tasks
-│   └── launch.json       Debug launch configurations
+│   ├── tasks.json            Build and clean tasks
+│   └── launch.json           Debug launch configurations
 └── src/
-    ├── CMakeLists.txt    Build system (CLI11 via FetchContent)
-    ├── diskdef.h         Disk geometry constants and derived calculations
-    ├── direntry.h        CP/M 2.2 directory entry layout and helpers
-    ├── cpm_disk.h        CpmDisk class interface
-    ├── cpm_disk.cpp      Disk creation, I/O, and all commands
-    ├── print_compat.h    println() shim for GCC < 14
-    └── main.cpp          CLI entry point (CLI11)
+    ├── CMakeLists.txt        Target definition only (add_executable + compile options)
+    ├── diskdef.h             Disk geometry constants and derived calculations
+    ├── direntry.h            CP/M 2.2 directory entry layout and helpers
+    ├── cpm_disk.h            CpmDisk class interface
+    ├── cpm_disk.cpp          Disk creation, I/O, and all commands
+    ├── print_compat.h        println() shim for GCC < 14
+    └── main.cpp              CLI entry point (CLI11)
 ```
 
 Build output:

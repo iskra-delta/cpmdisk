@@ -4,7 +4,7 @@
         {
             "label": "cmake-configure",
             "type": "shell",
-            "command": "cmake -S src -B build -DCMAKE_BUILD_TYPE=Debug",
+            "command": "cmake -B build -DCMAKE_BUILD_TYPE=Debug",
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "presentation": { "reveal": "always", "panel": "shared" },
