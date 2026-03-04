@@ -12,13 +12,12 @@ Implemented commands:
 - `info`: show geometry and free-space statistics
 - `list`: list files (optionally by CP/M user area)
 - `add`: copy host files into a CP/M user area
+- `extract`: copy files from image to host
+- `rename`: rename file inside image (optionally move between user areas)
+- `copy`: copy file inside image (optionally to another user area)
 - `remove`: delete by wildcard pattern (`*`, `?`)
-
-Not implemented in this repository:
-
-- file extraction back to host
-- file rename/copy within image
-- boot sector/system track tooling
+- `bootread`: export reserved boot/system tracks
+- `bootwrite`: import reserved boot/system tracks
 
 ## Disk formats
 
@@ -131,6 +130,24 @@ cpmdisk add boot.dsk COMMAND.COM
 cpmdisk add boot.dsk -u 3 MYPROG.COM DATA.DAT
 ```
 
+### extract
+
+Extract by wildcard, optionally limiting user and output directory:
+
+```bash
+cpmdisk extract boot.dsk '*.COM'
+cpmdisk extract boot.dsk -u 0 -o out '*.TXT'
+```
+
+### rename / copy
+
+Rename or copy inside image:
+
+```bash
+cpmdisk rename boot.dsk OLD.COM NEW.COM -u 0
+cpmdisk copy boot.dsk APP.COM APP2.COM -u 0 --to-user 3
+```
+
 ### remove
 
 Delete files by wildcard pattern (`*`, `?`), optionally restricted to one user area:
@@ -138,6 +155,15 @@ Delete files by wildcard pattern (`*`, `?`), optionally restricted to one user a
 ```bash
 cpmdisk remove boot.dsk '*.BAK'
 cpmdisk remove boot.dsk -u 0 '*.COM'
+```
+
+### bootread / bootwrite
+
+Export or import boot/system track area:
+
+```bash
+cpmdisk bootread boot.dsk boot.bin
+cpmdisk bootwrite boot.dsk boot.bin
 ```
 
 ## Geometry override options
@@ -161,7 +187,7 @@ Rules:
 - `--label` and `--datestamp` require CP/M 3 mode and add CP/M 3 directory metadata entries.
 - `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
 - Named formats can come from built-ins or from a `--diskdefs` file.
-- For `info/list/add/remove`: geometry is auto-detected by image size if no hint is supplied.
+- For `info/list/add/extract/rename/copy/remove/bootread/bootwrite`: geometry is auto-detected by image size if no hint is supplied.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
 
 ## CP/M behavior notes

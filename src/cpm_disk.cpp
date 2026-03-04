@@ -77,6 +77,85 @@ std::string human_size(uint64_t bytes) {
     return std::format("{} B", bytes);
 }
 
+uint32_t get_ptr_block(const dir_entry& e, const disk_def& def, uint32_t i) {
+    if (def.use_word_blocks())
+        return uint32_t(e.al[i * 2]) | (uint32_t(e.al[i * 2 + 1]) << 8);
+    return e.al[i];
+}
+
+std::string cpm_name_from_arrays(const std::array<char,8>& n, const std::array<char,3>& e) {
+    std::string name(n.data(), 8);
+    while (!name.empty() && name.back() == ' ') name.pop_back();
+    std::string ext(e.data(), 3);
+    while (!ext.empty() && ext.back() == ' ') ext.pop_back();
+    if (!ext.empty()) name += '.' + ext;
+    return name;
+}
+
+struct file_record {
+    uint8_t              user;
+    std::string          filename;
+    uint64_t             size;
+    std::vector<uint32_t> blocks;
+    std::vector<size_t>  entry_indices;
+};
+
+std::vector<file_record> collect_files(const std::vector<dir_entry>& dir,
+                                       const disk_def& def,
+                                       int user_filter) {
+    struct extent_ref {
+        uint32_t ext;
+        size_t   idx;
+    };
+    struct grouped_file {
+        std::map<uint32_t, extent_ref> extents;
+        std::vector<size_t>            entry_indices;
+        uint32_t                       max_ext{0};
+        uint8_t                        last_rc{0};
+    };
+
+    using key_t = std::tuple<uint8_t, std::string>;
+    std::map<key_t, grouped_file> grouped;
+
+    for (size_t i = 0; i < dir.size(); ++i) {
+        const auto& e = dir[i];
+        if (!entry_is_valid(e)) continue;
+        if (user_filter >= 0 && e.user != uint8_t(user_filter)) continue;
+
+        key_t key{e.user, entry_filename(e)};
+        auto& g = grouped[key];
+        uint32_t ext = extent_num(e);
+
+        g.entry_indices.push_back(i);
+        g.extents.try_emplace(ext, extent_ref{ext, i});
+        if (ext >= g.max_ext) {
+            g.max_ext = ext;
+            g.last_rc = e.rc;
+        }
+    }
+
+    std::vector<file_record> out;
+    for (auto& [key, g] : grouped) {
+        auto [u, fname] = key;
+        file_record rec;
+        rec.user = u;
+        rec.filename = fname;
+        rec.size = uint64_t(g.max_ext) * 16384u + uint64_t(g.last_rc) * 128u;
+        rec.entry_indices = g.entry_indices;
+
+        for (const auto& [ext_no, ext_ref] : g.extents) {
+            (void)ext_no;
+            const auto& e = dir[ext_ref.idx];
+            for (uint32_t i = 0; i < def.ptrs_per_extent(); ++i) {
+                uint32_t blk = get_ptr_block(e, def, i);
+                if (blk != 0) rec.blocks.push_back(blk);
+            }
+        }
+        out.push_back(std::move(rec));
+    }
+    return out;
+}
+
 } // namespace
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -340,6 +419,81 @@ void cpm_disk::cmd_list(int user) {
 
 // ── cmd_add ───────────────────────────────────────────────────────────────────
 
+void cpm_disk::add_cpm_file(const std::array<char,8>& cpm_name,
+                            const std::array<char,3>& cpm_ext,
+                            std::span<const uint8_t> data,
+                            int user) {
+    uint64_t file_size = data.size();
+    uint32_t bpe            = def_.blocks_per_extent();
+    uint32_t blocks_needed  = uint32_t((file_size + def_.blocksize - 1) / def_.blocksize);
+    uint32_t extents_needed = (blocks_needed == 0) ? 1u
+                            : (blocks_needed + bpe - 1) / bpe;
+
+    auto dir  = read_dir();
+    auto used = used_blocks(dir);
+
+    uint32_t free_blocks = def_.total_blocks() - uint32_t(used.size());
+    if (blocks_needed > free_blocks)
+        throw std::runtime_error(std::format(
+            "need {} blocks, only {} free", blocks_needed, free_blocks));
+
+    uint32_t free_entries = 0;
+    for (const auto& e : dir) if (entry_is_free(e)) ++free_entries;
+    if (extents_needed > free_entries)
+        throw std::runtime_error(std::format(
+            "need {} directory entries, only {} free", extents_needed, free_entries));
+
+    std::vector<uint32_t> alloc(blocks_needed);
+    for (auto& blk : alloc) blk = alloc_block(used);
+
+    for (uint32_t i = 0; i < blocks_needed; ++i) {
+        std::vector<uint8_t> buf(def_.blocksize, 0x1Au);
+        uint64_t src_offset = uint64_t(i) * def_.blocksize;
+        uint64_t copy_len   = std::min(uint64_t(def_.blocksize), file_size - src_offset);
+        std::copy(data.begin() + std::ptrdiff_t(src_offset),
+                  data.begin() + std::ptrdiff_t(src_offset + copy_len),
+                  buf.begin());
+        write_block(alloc[i], buf);
+    }
+
+    uint32_t ext_idx      = 0;
+    uint32_t blocks_done  = 0;
+    uint64_t bytes_left   = file_size;
+
+    for (auto& e : dir) {
+        if (!entry_is_free(e)) continue;
+        if (ext_idx >= extents_needed) break;
+
+        std::memset(&e, 0, sizeof(dir_entry));
+        e.user = uint8_t(user);
+        std::memcpy(e.name, cpm_name.data(), 8);
+        std::memcpy(e.ext,  cpm_ext.data(),  3);
+        e.xl = uint8_t(ext_idx & 0x1Fu);
+        e.xh = uint8_t((ext_idx >> 5) & 0x3Fu);
+
+        uint32_t blks_this = std::min(bpe, blocks_needed - blocks_done);
+        if (def_.use_word_blocks()) {
+            for (uint32_t i = 0; i < blks_this; ++i) {
+                uint16_t bn = uint16_t(alloc[blocks_done + i]);
+                e.al[i * 2] = uint8_t(bn & 0xFFu);
+                e.al[i * 2 + 1] = uint8_t(bn >> 8);
+            }
+        } else {
+            for (uint32_t i = 0; i < blks_this; ++i)
+                e.al[i] = uint8_t(alloc[blocks_done + i] & 0xFFu);
+        }
+
+        uint64_t extent_bytes = std::min(uint64_t(blks_this) * def_.blocksize, bytes_left);
+        e.rc = uint8_t((extent_bytes + 127u) / 128u);
+
+        blocks_done += blks_this;
+        bytes_left  -= extent_bytes;
+        ++ext_idx;
+    }
+
+    write_dir(dir);
+}
+
 void cpm_disk::cmd_add(const std::filesystem::path& host_path, int user) {
     if (user < 0 || user > 15)
         throw std::runtime_error(std::format("invalid user area {} (must be 0-15)", user));
@@ -360,94 +514,237 @@ void cpm_disk::cmd_add(const std::filesystem::path& host_path, int user) {
     // ── Convert to CP/M 8.3 name ─────────────────────────────────────────────
     auto [cpm_name, cpm_ext] = to_cpm_83(host_path.filename().string());
 
-    // ── Compute allocation requirements ──────────────────────────────────────
-    uint32_t bpe            = def_.blocks_per_extent();
-    uint32_t blocks_needed  = uint32_t((file_size + def_.blocksize - 1) / def_.blocksize);
-    uint32_t extents_needed = (blocks_needed == 0) ? 1u
-                            : (blocks_needed + bpe - 1) / bpe;
-
-    // ── Load directory and check capacity ─────────────────────────────────────
-    auto dir  = read_dir();
-    auto used = used_blocks(dir);
-
-    uint32_t free_blocks = def_.total_blocks() - uint32_t(used.size());
-    if (blocks_needed > free_blocks)
-        throw std::runtime_error(std::format(
-            "'{}': need {} blocks, only {} free",
-            host_path.filename().string(), blocks_needed, free_blocks));
-
-    uint32_t free_entries = 0;
-    for (const auto& e : dir) if (entry_is_free(e)) ++free_entries;
-    if (extents_needed > free_entries)
-        throw std::runtime_error(std::format(
-            "'{}': need {} directory entries, only {} free",
-            host_path.filename().string(), extents_needed, free_entries));
-
-    // ── Allocate data blocks ──────────────────────────────────────────────────
-    std::vector<uint32_t> alloc(blocks_needed);
-    for (auto& blk : alloc) blk = alloc_block(used);
-
-    // ── Write file data into blocks (last block padded with 0x1A) ─────────────
-    for (uint32_t i = 0; i < blocks_needed; ++i) {
-        std::vector<uint8_t> buf(def_.blocksize, 0x1Au);
-        uint64_t src_offset = uint64_t(i) * def_.blocksize;
-        uint64_t copy_len   = std::min(uint64_t(def_.blocksize), file_size - src_offset);
-        std::copy(data.begin() + std::ptrdiff_t(src_offset),
-                  data.begin() + std::ptrdiff_t(src_offset + copy_len),
-                  buf.begin());
-        write_block(alloc[i], buf);
-    }
-
-    // ── Write directory entries (one per extent) ──────────────────────────────
-    uint32_t ext_idx      = 0;
-    uint32_t blocks_done  = 0;
-    uint64_t bytes_left   = file_size;
-
-    for (auto& e : dir) {
-        if (!entry_is_free(e)) continue;
-        if (ext_idx >= extents_needed) break;
-
-        std::memset(&e, 0, sizeof(dir_entry));
-        e.user = uint8_t(user);
-        std::memcpy(e.name, cpm_name.data(), 8);
-        std::memcpy(e.ext,  cpm_ext.data(),  3);
-        e.xl = uint8_t(ext_idx & 0x1Fu);
-        e.xh = uint8_t((ext_idx >> 5) & 0x3Fu);
-
-        uint32_t blks_this = std::min(bpe, blocks_needed - blocks_done);
-
-        // Fill block pointer slots.
-        if (def_.use_word_blocks()) {
-            for (uint32_t i = 0; i < blks_this; ++i) {
-                uint16_t bn = uint16_t(alloc[blocks_done + i]);
-                e.al[i*2]   = uint8_t(bn & 0xFFu);
-                e.al[i*2+1] = uint8_t(bn >> 8);
-            }
-        } else {
-            for (uint32_t i = 0; i < blks_this; ++i)
-                e.al[i] = uint8_t(alloc[blocks_done + i] & 0xFFu);
-        }
-
-        // Record count: how many 128-byte records in this extent.
-        uint64_t extent_bytes = std::min(uint64_t(blks_this) * def_.blocksize, bytes_left);
-        e.rc = uint8_t((extent_bytes + 127u) / 128u);
-
-        blocks_done += blks_this;
-        bytes_left  -= extent_bytes;
-        ++ext_idx;
-    }
-
-    write_dir(dir);
+    add_cpm_file(cpm_name, cpm_ext, data, user);
 
     // Build display name from the 8+3 arrays we computed earlier.
-    std::string display_name(cpm_name.data(), 8);
-    while (!display_name.empty() && display_name.back() == ' ') display_name.pop_back();
-    std::string display_ext(cpm_ext.data(), 3);
-    while (!display_ext.empty() && display_ext.back() == ' ') display_ext.pop_back();
-    if (!display_ext.empty()) display_name += '.' + display_ext;
+    std::string display_name = cpm_name_from_arrays(cpm_name, cpm_ext);
+    uint32_t blocks_needed = uint32_t((file_size + def_.blocksize - 1) / def_.blocksize);
 
     pc::println("Added  {:>4}:{}  ({}, {} block(s))",
         user, display_name, human_size(file_size), blocks_needed);
+}
+
+// ── cmd_extract ───────────────────────────────────────────────────────────────
+
+void cpm_disk::cmd_extract(const std::vector<std::string>& patterns,
+                           const std::filesystem::path& out_dir,
+                           int user) {
+    if (user < -1 || user > 15)
+        throw std::runtime_error(std::format("invalid user area {} (must be 0-15)", user));
+
+    auto dir = read_dir();
+    auto files = collect_files(dir, def_, user);
+
+    std::vector<std::string> pats = patterns;
+    if (pats.empty()) pats.push_back("*");
+    for (auto& p : pats) p = to_upper(p);
+
+    std::filesystem::create_directories(out_dir);
+    size_t extracted = 0;
+
+    for (const auto& f : files) {
+        std::string up_name = to_upper(f.filename);
+        bool match = false;
+        for (const auto& p : pats) {
+            if (wildcard_match(p, up_name)) {
+                match = true;
+                break;
+            }
+        }
+        if (!match) continue;
+
+        std::filesystem::path dst_dir = out_dir;
+        if (user < 0) {
+            dst_dir /= std::format("u{:02}", unsigned(f.user));
+            std::filesystem::create_directories(dst_dir);
+        }
+        std::filesystem::path dst = dst_dir / f.filename;
+
+        std::vector<uint8_t> data(f.size);
+        uint64_t copied = 0;
+        for (uint32_t blk : f.blocks) {
+            if (copied >= f.size) break;
+            auto block = read_block(blk);
+            uint64_t n = std::min<uint64_t>(def_.blocksize, f.size - copied);
+            std::copy(block.begin(), block.begin() + std::ptrdiff_t(n),
+                      data.begin() + std::ptrdiff_t(copied));
+            copied += n;
+        }
+
+        std::ofstream out(dst, std::ios::binary | std::ios::trunc);
+        if (!out)
+            throw std::runtime_error(std::format("cannot create '{}'", dst.string()));
+        if (!data.empty())
+            out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
+        if (!out)
+            throw std::runtime_error(std::format("write failed for '{}'", dst.string()));
+
+        pc::println("Extracted {:>4}:{} -> {}", unsigned(f.user), f.filename, dst.string());
+        ++extracted;
+    }
+
+    if (extracted == 0)
+        pc::println("No files matched.");
+    else
+        pc::println("Extracted {} file(s).", extracted);
+}
+
+// ── cmd_rename ────────────────────────────────────────────────────────────────
+
+void cpm_disk::cmd_rename(const std::string& src_name,
+                          const std::string& dst_name,
+                          int user,
+                          int to_user) {
+    if (user < -1 || user > 15)
+        throw std::runtime_error(std::format("invalid source user {} (must be 0-15)", user));
+    if (to_user < -1 || to_user > 15)
+        throw std::runtime_error(std::format("invalid destination user {} (must be 0-15)", to_user));
+
+    auto [dst_cpm_name, dst_cpm_ext] = to_cpm_83(dst_name);
+    std::string src_up = to_upper(src_name);
+    std::string dst_disp = cpm_name_from_arrays(dst_cpm_name, dst_cpm_ext);
+    std::string dst_up = to_upper(dst_disp);
+
+    auto dir = read_dir();
+    auto files = collect_files(dir, def_, user);
+
+    std::vector<file_record> src_matches;
+    for (const auto& f : files)
+        if (to_upper(f.filename) == src_up) src_matches.push_back(f);
+
+    if (src_matches.empty())
+        throw std::runtime_error(std::format("source '{}' not found", src_name));
+    if (src_matches.size() > 1)
+        throw std::runtime_error(std::format("source '{}' is ambiguous; pass -u/--user", src_name));
+
+    const auto& src = src_matches.front();
+    uint8_t target_user = (to_user >= 0) ? uint8_t(to_user) : src.user;
+
+    for (const auto& f : files) {
+        if (f.user == target_user && to_upper(f.filename) == dst_up)
+            throw std::runtime_error(std::format(
+                "destination {:>4}:{} already exists", unsigned(target_user), dst_disp));
+    }
+
+    for (size_t idx : src.entry_indices) {
+        auto& e = dir[idx];
+        e.user = target_user;
+        std::memcpy(e.name, dst_cpm_name.data(), 8);
+        std::memcpy(e.ext,  dst_cpm_ext.data(),  3);
+    }
+    write_dir(dir);
+
+    pc::println("Renamed {:>4}:{} -> {:>4}:{}",
+        unsigned(src.user), src.filename, unsigned(target_user), dst_disp);
+}
+
+// ── cmd_copy ──────────────────────────────────────────────────────────────────
+
+void cpm_disk::cmd_copy(const std::string& src_name,
+                        const std::string& dst_name,
+                        int user,
+                        int to_user) {
+    if (user < -1 || user > 15)
+        throw std::runtime_error(std::format("invalid source user {} (must be 0-15)", user));
+    if (to_user < -1 || to_user > 15)
+        throw std::runtime_error(std::format("invalid destination user {} (must be 0-15)", to_user));
+
+    auto [dst_cpm_name, dst_cpm_ext] = to_cpm_83(dst_name);
+    std::string src_up = to_upper(src_name);
+    std::string dst_disp = cpm_name_from_arrays(dst_cpm_name, dst_cpm_ext);
+    std::string dst_up = to_upper(dst_disp);
+
+    auto dir = read_dir();
+    auto files = collect_files(dir, def_, user);
+
+    std::vector<file_record> src_matches;
+    for (const auto& f : files)
+        if (to_upper(f.filename) == src_up) src_matches.push_back(f);
+
+    if (src_matches.empty())
+        throw std::runtime_error(std::format("source '{}' not found", src_name));
+    if (src_matches.size() > 1)
+        throw std::runtime_error(std::format("source '{}' is ambiguous; pass -u/--user", src_name));
+
+    const auto& src = src_matches.front();
+    uint8_t target_user = (to_user >= 0) ? uint8_t(to_user) : src.user;
+
+    for (const auto& f : files) {
+        if (f.user == target_user && to_upper(f.filename) == dst_up)
+            throw std::runtime_error(std::format(
+                "destination {:>4}:{} already exists", unsigned(target_user), dst_disp));
+    }
+
+    std::vector<uint8_t> data(src.size);
+    uint64_t copied = 0;
+    for (uint32_t blk : src.blocks) {
+        if (copied >= src.size) break;
+        auto block = read_block(blk);
+        uint64_t n = std::min<uint64_t>(def_.blocksize, src.size - copied);
+        std::copy(block.begin(), block.begin() + std::ptrdiff_t(n),
+                  data.begin() + std::ptrdiff_t(copied));
+        copied += n;
+    }
+
+    add_cpm_file(dst_cpm_name, dst_cpm_ext, data, target_user);
+    pc::println("Copied  {:>4}:{} -> {:>4}:{}  ({})",
+        unsigned(src.user), src.filename, unsigned(target_user), dst_disp, human_size(src.size));
+}
+
+// ── cmd_boot_* ────────────────────────────────────────────────────────────────
+
+void cpm_disk::cmd_boot_read(const std::filesystem::path& out_path) {
+    uint64_t boot_bytes = uint64_t(def_.boot_sectors()) * def_.seclen;
+    if (boot_bytes == 0)
+        throw std::runtime_error("this disk format has no reserved boot tracks");
+
+    std::vector<uint8_t> data(boot_bytes);
+    file_.seekg(0);
+    file_.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size()));
+    if (!file_)
+        throw std::runtime_error("failed to read boot/system track area");
+
+    std::ofstream out(out_path, std::ios::binary | std::ios::trunc);
+    if (!out)
+        throw std::runtime_error(std::format("cannot create '{}'", out_path.string()));
+    out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
+    if (!out)
+        throw std::runtime_error(std::format("failed to write '{}'", out_path.string()));
+
+    pc::println("Wrote boot/system area ({} bytes) to '{}'", boot_bytes, out_path.string());
+}
+
+void cpm_disk::cmd_boot_write(const std::filesystem::path& in_path) {
+    uint64_t boot_bytes = uint64_t(def_.boot_sectors()) * def_.seclen;
+    if (boot_bytes == 0)
+        throw std::runtime_error("this disk format has no reserved boot tracks");
+
+    if (!std::filesystem::exists(in_path))
+        throw std::runtime_error(std::format("'{}': file not found", in_path.string()));
+
+    uint64_t src_size = std::filesystem::file_size(in_path);
+    if (src_size != boot_bytes)
+        throw std::runtime_error(std::format(
+            "'{}': expected {} bytes for boot/system area, got {}",
+            in_path.string(), boot_bytes, src_size));
+
+    std::vector<uint8_t> data(src_size);
+    {
+        std::ifstream in(in_path, std::ios::binary);
+        if (!in)
+            throw std::runtime_error(std::format("cannot open '{}' for reading", in_path.string()));
+        in.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size()));
+        if (!in)
+            throw std::runtime_error(std::format("failed to read '{}'", in_path.string()));
+    }
+
+    file_.seekp(0);
+    file_.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
+    file_.flush();
+    if (!file_)
+        throw std::runtime_error("failed to write boot/system track area");
+
+    pc::println("Updated boot/system area ({} bytes) from '{}'", boot_bytes, in_path.string());
 }
 
 // ── cmd_remove ────────────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -19,8 +20,7 @@ struct create_opts {
 
 // ── cpm_disk ────────────────────────────────────────────────────────────────────
 //
-// Provides create / open factory methods and the four user-facing commands:
-//   info, list, add, remove
+// Provides create/open factory methods and user-facing disk commands.
 //
 // The disk image is a flat binary file; tracks are stored sequentially,
 // each track holds sectrk sectors of seclen bytes.  No interleave or skew
@@ -52,6 +52,27 @@ public:
     // Copy a host file onto the disk in the given CP/M user area.
     void cmd_add(const std::filesystem::path& host_path, int user);
 
+    // Extract files from disk image to host directory.
+    void cmd_extract(const std::vector<std::string>& patterns,
+                     const std::filesystem::path& out_dir,
+                     int user = -1);
+
+    // Rename a file within the image.
+    void cmd_rename(const std::string& src_name,
+                    const std::string& dst_name,
+                    int user = -1,
+                    int to_user = -1);
+
+    // Copy a file within the image.
+    void cmd_copy(const std::string& src_name,
+                  const std::string& dst_name,
+                  int user = -1,
+                  int to_user = -1);
+
+    // Read/write reserved boot+system track area.
+    void cmd_boot_read(const std::filesystem::path& out_path);
+    void cmd_boot_write(const std::filesystem::path& in_path);
+
     // Delete all directory entries whose "NAME.EXT" matches the wildcard
     // pattern (* and ? supported).  Pass user >= 0 to restrict; -1 = all.
     void cmd_remove(const std::string& pattern, int user = -1);
@@ -78,6 +99,11 @@ private:
 
     // Find and return the lowest-numbered free block, adding it to `used`.
     uint32_t alloc_block(std::set<uint32_t>& used) const;
+
+    void add_cpm_file(const std::array<char,8>& cpm_name,
+                      const std::array<char,3>& cpm_ext,
+                      std::span<const uint8_t> data,
+                      int user);
 
     // ── State ─────────────────────────────────────────────────────────────────
 

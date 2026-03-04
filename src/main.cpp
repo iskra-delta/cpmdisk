@@ -221,6 +221,104 @@ int main(int argc, char* argv[]) {
         add_geo_options(cmd, rm_geo);
     }
 
+    // ── extract ───────────────────────────────────────────────────────────────
+    std::string              ex_path, ex_fmt;
+    int                      ex_user = -1;
+    std::vector<std::string> ex_patterns;
+    std::string              ex_outdir = ".";
+    geo_opts                 ex_geo;
+    std::string              ex_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("extract",
+            "Extract files from disk image to host directory.\n"
+            "If no patterns are given, all files are extracted.");
+        cmd->add_option("disk",        ex_path, "Disk image file")->required();
+        cmd->add_option("-f,--format", ex_fmt,  "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", ex_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        cmd->add_option("-u,--user",   ex_user,
+            "Restrict extraction to a CP/M user area (0-15)");
+        cmd->add_option("-o,--outdir", ex_outdir,
+            "Host output directory (default: current directory)");
+        cmd->add_option("patterns", ex_patterns,
+            "Wildcard patterns matched against NAME.EXT")
+           ->expected(-1);
+        add_geo_options(cmd, ex_geo);
+    }
+
+    // ── rename ────────────────────────────────────────────────────────────────
+    std::string rn_path, rn_fmt, rn_src, rn_dst;
+    int         rn_user = -1;
+    int         rn_to_user = -1;
+    geo_opts    rn_geo;
+    std::string rn_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("rename",
+            "Rename a file within the image.");
+        cmd->add_option("disk", rn_path, "Disk image file")->required();
+        cmd->add_option("src", rn_src, "Source CP/M filename")->required();
+        cmd->add_option("dst", rn_dst, "Destination CP/M filename")->required();
+        cmd->add_option("-f,--format", rn_fmt, "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", rn_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        cmd->add_option("-u,--user", rn_user,
+            "Source user area (0-15). Required when name exists in multiple users");
+        cmd->add_option("--to-user", rn_to_user,
+            "Destination user area (0-15, default: source user)");
+        add_geo_options(cmd, rn_geo);
+    }
+
+    // ── copy ──────────────────────────────────────────────────────────────────
+    std::string cp_path, cp_fmt, cp_src, cp_dst;
+    int         cp_user = -1;
+    int         cp_to_user = -1;
+    geo_opts    cp_geo;
+    std::string cp_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("copy",
+            "Copy a file within the image.");
+        cmd->add_option("disk", cp_path, "Disk image file")->required();
+        cmd->add_option("src", cp_src, "Source CP/M filename")->required();
+        cmd->add_option("dst", cp_dst, "Destination CP/M filename")->required();
+        cmd->add_option("-f,--format", cp_fmt, "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", cp_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        cmd->add_option("-u,--user", cp_user,
+            "Source user area (0-15). Required when name exists in multiple users");
+        cmd->add_option("--to-user", cp_to_user,
+            "Destination user area (0-15, default: source user)");
+        add_geo_options(cmd, cp_geo);
+    }
+
+    // ── bootread / bootwrite ──────────────────────────────────────────────────
+    std::string br_path, br_fmt, br_out;
+    geo_opts    br_geo;
+    std::string br_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("bootread",
+            "Read reserved boot/system track area to a host file.");
+        cmd->add_option("disk", br_path, "Disk image file")->required();
+        cmd->add_option("out", br_out, "Output host binary file")->required();
+        cmd->add_option("-f,--format", br_fmt, "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", br_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        add_geo_options(cmd, br_geo);
+    }
+
+    std::string bw_path, bw_fmt, bw_in;
+    geo_opts    bw_geo;
+    std::string bw_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("bootwrite",
+            "Write reserved boot/system track area from a host file.");
+        cmd->add_option("disk", bw_path, "Disk image file")->required();
+        cmd->add_option("in", bw_in, "Input host binary file")->required();
+        cmd->add_option("-f,--format", bw_fmt, "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", bw_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        add_geo_options(cmd, bw_geo);
+    }
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -271,6 +369,41 @@ int main(int argc, char* argv[]) {
                                        resolve_open_hint(rm_fmt, rm_geo, rm_diskdefs));
             for (const auto& pat : rm_patterns)
                 disk.cmd_remove(pat, rm_user);
+        }
+
+        // ── extract ───────────────────────────────────────────────────────────
+        else if (app.got_subcommand("extract")) {
+            auto disk = cpm_disk::open({ex_path},
+                                       resolve_open_hint(ex_fmt, ex_geo, ex_diskdefs));
+            disk.cmd_extract(ex_patterns, std::filesystem::path{ex_outdir}, ex_user);
+        }
+
+        // ── rename ────────────────────────────────────────────────────────────
+        else if (app.got_subcommand("rename")) {
+            auto disk = cpm_disk::open({rn_path},
+                                       resolve_open_hint(rn_fmt, rn_geo, rn_diskdefs));
+            disk.cmd_rename(rn_src, rn_dst, rn_user, rn_to_user);
+        }
+
+        // ── copy ──────────────────────────────────────────────────────────────
+        else if (app.got_subcommand("copy")) {
+            auto disk = cpm_disk::open({cp_path},
+                                       resolve_open_hint(cp_fmt, cp_geo, cp_diskdefs));
+            disk.cmd_copy(cp_src, cp_dst, cp_user, cp_to_user);
+        }
+
+        // ── bootread ──────────────────────────────────────────────────────────
+        else if (app.got_subcommand("bootread")) {
+            auto disk = cpm_disk::open({br_path},
+                                       resolve_open_hint(br_fmt, br_geo, br_diskdefs));
+            disk.cmd_boot_read(std::filesystem::path{br_out});
+        }
+
+        // ── bootwrite ─────────────────────────────────────────────────────────
+        else if (app.got_subcommand("bootwrite")) {
+            auto disk = cpm_disk::open({bw_path},
+                                       resolve_open_hint(bw_fmt, bw_geo, bw_diskdefs));
+            disk.cmd_boot_write(std::filesystem::path{bw_in});
         }
 
     } catch (const std::exception& ex) {
