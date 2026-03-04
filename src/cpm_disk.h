@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-// ── CpmDisk ────────────────────────────────────────────────────────────────────
+// ── cpm_disk ────────────────────────────────────────────────────────────────────
 //
 // Provides create / open factory methods and the four user-facing commands:
 //   info, list, add, remove
@@ -20,18 +20,18 @@
 // each track holds sectrk sectors of seclen bytes.  No interleave or skew
 // is applied (skew = 0 for both IDP disk types).
 
-class CpmDisk {
+class cpm_disk {
 public:
     // ── Factory ───────────────────────────────────────────────────────────────
 
     // Create a new, blank disk image (filled with 0x00; directory with 0xE5).
-    static CpmDisk create(const std::filesystem::path& path, const DiskDef& def);
+    static cpm_disk create(const std::filesystem::path& path, const disk_def& def);
 
     // Open an existing disk image.
     // If `hint` is provided it is used directly; otherwise the type is inferred
     // from the file size.  Throws if auto-detection fails and no hint is given.
-    static CpmDisk open(const std::filesystem::path& path,
-                        std::optional<DiskDef>        hint = std::nullopt);
+    static cpm_disk open(const std::filesystem::path& path,
+                        std::optional<disk_def>        hint = std::nullopt);
 
     // ── Commands ──────────────────────────────────────────────────────────────
 
@@ -49,15 +49,15 @@ public:
     void cmd_remove(const std::string& pattern, int user = -1);
 
     // Accessors
-    const DiskDef& def() const noexcept { return def_; }
+    const disk_def& def() const noexcept { return def_; }
 
 private:
-    explicit CpmDisk(std::filesystem::path path, DiskDef def);
+    explicit cpm_disk(std::filesystem::path path, disk_def def);
 
     // ── Low-level I/O ─────────────────────────────────────────────────────────
 
-    std::vector<DirEntry>  read_dir()  const;
-    void                   write_dir(const std::vector<DirEntry>& dir);
+    std::vector<dir_entry>  read_dir()  const;
+    void                   write_dir(const std::vector<dir_entry>& dir);
 
     std::vector<uint8_t>   read_block(uint32_t block)                      const;
     void                   write_block(uint32_t block, std::span<const uint8_t> data);
@@ -66,7 +66,7 @@ private:
 
     // Returns the set of block numbers currently referenced by valid entries,
     // plus the directory blocks (which are always allocated).
-    std::set<uint32_t> used_blocks(const std::vector<DirEntry>& dir) const;
+    std::set<uint32_t> used_blocks(const std::vector<dir_entry>& dir) const;
 
     // Find and return the lowest-numbered free block, adding it to `used`.
     uint32_t alloc_block(std::set<uint32_t>& used) const;
@@ -74,6 +74,6 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
 
     std::filesystem::path path_;
-    DiskDef               def_;
+    disk_def               def_;
     mutable std::fstream  file_;
 };

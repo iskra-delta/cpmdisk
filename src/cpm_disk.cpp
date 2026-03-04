@@ -81,7 +81,7 @@ std::string human_size(uint64_t bytes) {
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
-CpmDisk::CpmDisk(std::filesystem::path path, DiskDef def)
+cpm_disk::cpm_disk(std::filesystem::path path, disk_def def)
     : path_(std::move(path)), def_(def)
 {
     file_.open(path_, std::ios::in | std::ios::out | std::ios::binary);
@@ -92,7 +92,7 @@ CpmDisk::CpmDisk(std::filesystem::path path, DiskDef def)
 
 // ── Factory: create ───────────────────────────────────────────────────────────
 
-CpmDisk CpmDisk::create(const std::filesystem::path& path, const DiskDef& def) {
+cpm_disk cpm_disk::create(const std::filesystem::path& path, const disk_def& def) {
     // Write the blank image (all zeros).
     {
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
@@ -115,7 +115,7 @@ CpmDisk CpmDisk::create(const std::filesystem::path& path, const DiskDef& def) {
     // any unoccupied space in the last directory block is also marked free.  This
     // prevents spurious "used" entries if the disk is later opened with a larger
     // maxdir (e.g. when overriding a standard type).
-    CpmDisk disk(path, def);
+    cpm_disk disk(path, def);
     uint64_t dir_area = uint64_t(def.dir_blocks()) * def.blocksize;
     std::vector<uint8_t> e5(dir_area, 0xE5u);
     disk.file_.seekp(std::streamoff(def.block_offset(0)));
@@ -126,9 +126,9 @@ CpmDisk CpmDisk::create(const std::filesystem::path& path, const DiskDef& def) {
 
 // ── Factory: open ─────────────────────────────────────────────────────────────
 
-CpmDisk CpmDisk::open(const std::filesystem::path& path, std::optional<DiskDef> hint) {
+cpm_disk cpm_disk::open(const std::filesystem::path& path, std::optional<disk_def> hint) {
     if (hint)
-        return CpmDisk(path, *hint);
+        return cpm_disk(path, *hint);
 
     auto sz  = std::filesystem::file_size(path);
     auto opt = diskdef_by_size(sz);
@@ -136,37 +136,37 @@ CpmDisk CpmDisk::open(const std::filesystem::path& path, std::optional<DiskDef> 
         throw std::runtime_error(std::format(
             "'{}': unrecognised disk size {} bytes – use -f/--format or geometry flags",
             path.string(), sz));
-    return CpmDisk(path, *opt);
+    return cpm_disk(path, *opt);
 }
 
 // ── Low-level I/O ─────────────────────────────────────────────────────────────
 
-std::vector<DirEntry> CpmDisk::read_dir() const {
+std::vector<dir_entry> cpm_disk::read_dir() const {
     uint64_t offset = uint64_t(def_.boot_sectors()) * def_.seclen;
     file_.seekg(std::streamoff(offset));
     if (!file_)
         throw std::runtime_error("seek failed while reading directory");
 
-    std::vector<DirEntry> dir(def_.maxdir);
+    std::vector<dir_entry> dir(def_.maxdir);
     file_.read(reinterpret_cast<char*>(dir.data()),
-               std::streamsize(def_.maxdir * sizeof(DirEntry)));
+               std::streamsize(def_.maxdir * sizeof(dir_entry)));
     if (!file_)
         throw std::runtime_error("read failed while reading directory");
     return dir;
 }
 
-void CpmDisk::write_dir(const std::vector<DirEntry>& dir) {
+void cpm_disk::write_dir(const std::vector<dir_entry>& dir) {
     assert(dir.size() == def_.maxdir);
     uint64_t offset = uint64_t(def_.boot_sectors()) * def_.seclen;
     file_.seekp(std::streamoff(offset));
     file_.write(reinterpret_cast<const char*>(dir.data()),
-                std::streamsize(def_.maxdir * sizeof(DirEntry)));
+                std::streamsize(def_.maxdir * sizeof(dir_entry)));
     file_.flush();
     if (!file_)
         throw std::runtime_error("write failed while writing directory");
 }
 
-std::vector<uint8_t> CpmDisk::read_block(uint32_t block) const {
+std::vector<uint8_t> cpm_disk::read_block(uint32_t block) const {
     std::vector<uint8_t> buf(def_.blocksize);
     file_.seekg(std::streamoff(def_.block_offset(block)));
     file_.read(reinterpret_cast<char*>(buf.data()), std::streamsize(def_.blocksize));
@@ -175,7 +175,7 @@ std::vector<uint8_t> CpmDisk::read_block(uint32_t block) const {
     return buf;
 }
 
-void CpmDisk::write_block(uint32_t block, std::span<const uint8_t> data) {
+void cpm_disk::write_block(uint32_t block, std::span<const uint8_t> data) {
     assert(data.size() == def_.blocksize);
     file_.seekp(std::streamoff(def_.block_offset(block)));
     file_.write(reinterpret_cast<const char*>(data.data()),
@@ -186,7 +186,7 @@ void CpmDisk::write_block(uint32_t block, std::span<const uint8_t> data) {
 
 // ── Allocation ────────────────────────────────────────────────────────────────
 
-std::set<uint32_t> CpmDisk::used_blocks(const std::vector<DirEntry>& dir) const {
+std::set<uint32_t> cpm_disk::used_blocks(const std::vector<dir_entry>& dir) const {
     std::set<uint32_t> used;
 
     // Directory blocks are permanently allocated (blocks 0 .. dir_blocks-1).
@@ -207,7 +207,7 @@ std::set<uint32_t> CpmDisk::used_blocks(const std::vector<DirEntry>& dir) const 
     return used;
 }
 
-uint32_t CpmDisk::alloc_block(std::set<uint32_t>& used) const {
+uint32_t cpm_disk::alloc_block(std::set<uint32_t>& used) const {
     for (uint32_t i = def_.dir_blocks(); i < def_.total_blocks(); ++i) {
         if (!used.contains(i)) {
             used.insert(i);
@@ -219,7 +219,7 @@ uint32_t CpmDisk::alloc_block(std::set<uint32_t>& used) const {
 
 // ── cmd_info ──────────────────────────────────────────────────────────────────
 
-void CpmDisk::cmd_info() {
+void cpm_disk::cmd_info() {
     auto dir  = read_dir();
     auto used = used_blocks(dir);
 
@@ -256,14 +256,14 @@ void CpmDisk::cmd_info() {
 
 // ── cmd_list ──────────────────────────────────────────────────────────────────
 
-void CpmDisk::cmd_list(int user) {
+void cpm_disk::cmd_list(int user) {
     auto dir = read_dir();
 
     // Group extents by (user, filename) to compute file sizes.
     // Key: (user, filename).  Value: (max_extent_num, rc_of_that_extent).
     using FileKey = std::tuple<uint8_t, std::string>;
-    struct FileAcc { uint32_t max_ext{0}; uint8_t last_rc{0}; };
-    std::map<FileKey, FileAcc> files;
+    struct file_acc { uint32_t max_ext{0}; uint8_t last_rc{0}; };
+    std::map<FileKey, file_acc> files;
 
     for (const auto& e : dir) {
         if (!entry_is_valid(e)) continue;
@@ -301,7 +301,7 @@ void CpmDisk::cmd_list(int user) {
 
 // ── cmd_add ───────────────────────────────────────────────────────────────────
 
-void CpmDisk::cmd_add(const std::filesystem::path& host_path, int user) {
+void cpm_disk::cmd_add(const std::filesystem::path& host_path, int user) {
     if (user < 0 || user > 15)
         throw std::runtime_error(std::format("invalid user area {} (must be 0-15)", user));
 
@@ -368,7 +368,7 @@ void CpmDisk::cmd_add(const std::filesystem::path& host_path, int user) {
         if (!entry_is_free(e)) continue;
         if (ext_idx >= extents_needed) break;
 
-        std::memset(&e, 0, sizeof(DirEntry));
+        std::memset(&e, 0, sizeof(dir_entry));
         e.user = uint8_t(user);
         std::memcpy(e.name, cpm_name.data(), 8);
         std::memcpy(e.ext,  cpm_ext.data(),  3);
@@ -413,7 +413,7 @@ void CpmDisk::cmd_add(const std::filesystem::path& host_path, int user) {
 
 // ── cmd_remove ────────────────────────────────────────────────────────────────
 
-void CpmDisk::cmd_remove(const std::string& pattern, int user) {
+void cpm_disk::cmd_remove(const std::string& pattern, int user) {
     std::string up_pattern = to_upper(pattern);
     auto dir = read_dir();
     int removed = 0;

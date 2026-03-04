@@ -11,7 +11,7 @@
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Register all seven geometry override options on `cmd` under a named group.
-static void add_geo_options(CLI::App* cmd, GeoOpts& g) {
+static void add_geo_options(CLI::App* cmd, geo_opts& g) {
     auto* grp = cmd->add_option_group("Geometry overrides",
         "Fine-tune or fully specify disk geometry (applied on top of the named type).");
     grp->add_option("--seclen",    g.seclen,    "Sector size in bytes");
@@ -23,10 +23,10 @@ static void add_geo_options(CLI::App* cmd, GeoOpts& g) {
     grp->add_option("--boottrk",   g.boottrk,   "Number of reserved boot tracks");
 }
 
-// Resolve the DiskDef for create.
+// Resolve the disk_def for create.
 // `type` may be empty only when geo supplies all required fields.
-static DiskDef resolve_create_def(const std::string& type, const GeoOpts& geo) {
-    DiskDef def;
+static disk_def resolve_create_def(const std::string& type, const geo_opts& geo) {
+    disk_def def;
     if (!type.empty()) {
         auto opt = find_diskdef(type);
         if (!opt)
@@ -35,7 +35,7 @@ static DiskDef resolve_create_def(const std::string& type, const GeoOpts& geo) {
                 type));
         def = *opt;
     } else if (geo.all_required()) {
-        def = DiskDef{"custom", 256, 0, 0, 1024, 64, 0, 0};
+        def = disk_def{"custom", 256, 0, 0, 1024, 64, 0, 0};
     } else {
         throw std::runtime_error(
             "create: specify a disk type (fdd/hdd) or supply all geometry flags\n"
@@ -45,13 +45,13 @@ static DiskDef resolve_create_def(const std::string& type, const GeoOpts& geo) {
     return def;
 }
 
-// Resolve the optional DiskDef hint for open commands.
+// Resolve the optional disk_def hint for open commands.
 // Returns nullopt to trigger size-based auto-detection when nothing is specified.
-static std::optional<DiskDef> resolve_open_hint(const std::string& fmt, const GeoOpts& geo) {
+static std::optional<disk_def> resolve_open_hint(const std::string& fmt, const geo_opts& geo) {
     if (fmt.empty() && !geo.any())
         return std::nullopt;
 
-    DiskDef def;
+    disk_def def;
     if (!fmt.empty()) {
         auto opt = find_diskdef(fmt);
         if (!opt)
@@ -62,7 +62,7 @@ static std::optional<DiskDef> resolve_open_hint(const std::string& fmt, const Ge
             throw std::runtime_error(
                 "geometry flags given but incomplete – required: "
                 "--seclen --tracks --sectrk --blocksize --maxdir --boottrk");
-        def = DiskDef{"custom", 256, 0, 0, 1024, 64, 0, 0};
+        def = disk_def{"custom", 256, 0, 0, 1024, 64, 0, 0};
     }
     geo.apply_to(def);
     return def;
@@ -87,7 +87,7 @@ int main(int argc, char* argv[]) {
 
     // ── create ────────────────────────────────────────────────────────────────
     std::string create_path, create_type;
-    GeoOpts     create_geo;
+    geo_opts     create_geo;
     {
         auto* cmd = app.add_subcommand("create",
             "Create a new blank disk image.\n"
@@ -103,7 +103,7 @@ int main(int argc, char* argv[]) {
 
     // ── info ──────────────────────────────────────────────────────────────────
     std::string info_path, info_fmt;
-    GeoOpts     info_geo;
+    geo_opts     info_geo;
     {
         auto* cmd = app.add_subcommand("info",
             "Show disk geometry and free-space statistics.");
@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
     // ── list ──────────────────────────────────────────────────────────────────
     std::string list_path, list_fmt;
     int         list_user = -1;
-    GeoOpts     list_geo;
+    geo_opts     list_geo;
     {
         auto* cmd = app.add_subcommand("list", "List files on the disk.");
         cmd->add_option("disk",        list_path, "Disk image file")->required();
@@ -130,7 +130,7 @@ int main(int argc, char* argv[]) {
     std::string              add_path, add_fmt;
     int                      add_user = 0;
     std::vector<std::string> add_files;
-    GeoOpts                  add_geo;
+    geo_opts                  add_geo;
     {
         auto* cmd = app.add_subcommand("add",
             "Add one or more host files to the disk.\n"
@@ -149,7 +149,7 @@ int main(int argc, char* argv[]) {
     std::string              rm_path, rm_fmt;
     int                      rm_user = -1;
     std::vector<std::string> rm_patterns;
-    GeoOpts                  rm_geo;
+    geo_opts                  rm_geo;
     {
         auto* cmd = app.add_subcommand("remove",
             "Remove files matching one or more wildcard patterns.\n"
@@ -176,8 +176,8 @@ int main(int argc, char* argv[]) {
                 throw std::runtime_error(std::format(
                     "'{}' already exists; remove it first", create_path));
 
-            DiskDef def = resolve_create_def(create_type, create_geo);
-            CpmDisk::create(p, def);
+            disk_def def = resolve_create_def(create_type, create_geo);
+            cpm_disk::create(p, def);
             pc::println("Created {} image '{}': {} tracks x {} sec/trk x {} B = {} bytes",
                 def.name, create_path,
                 def.tracks, def.sectrk, def.seclen,
@@ -186,26 +186,26 @@ int main(int argc, char* argv[]) {
 
         // ── info ──────────────────────────────────────────────────────────────
         else if (app.got_subcommand("info")) {
-            auto disk = CpmDisk::open({info_path}, resolve_open_hint(info_fmt, info_geo));
+            auto disk = cpm_disk::open({info_path}, resolve_open_hint(info_fmt, info_geo));
             disk.cmd_info();
         }
 
         // ── list ──────────────────────────────────────────────────────────────
         else if (app.got_subcommand("list")) {
-            auto disk = CpmDisk::open({list_path}, resolve_open_hint(list_fmt, list_geo));
+            auto disk = cpm_disk::open({list_path}, resolve_open_hint(list_fmt, list_geo));
             disk.cmd_list(list_user);
         }
 
         // ── add ───────────────────────────────────────────────────────────────
         else if (app.got_subcommand("add")) {
-            auto disk = CpmDisk::open({add_path}, resolve_open_hint(add_fmt, add_geo));
+            auto disk = cpm_disk::open({add_path}, resolve_open_hint(add_fmt, add_geo));
             for (const auto& f : add_files)
                 disk.cmd_add(std::filesystem::path{f}, add_user);
         }
 
         // ── remove ────────────────────────────────────────────────────────────
         else if (app.got_subcommand("remove")) {
-            auto disk = CpmDisk::open({rm_path}, resolve_open_hint(rm_fmt, rm_geo));
+            auto disk = cpm_disk::open({rm_path}, resolve_open_hint(rm_fmt, rm_geo));
             for (const auto& pat : rm_patterns)
                 disk.cmd_remove(pat, rm_user);
         }

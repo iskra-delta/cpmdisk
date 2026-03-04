@@ -7,7 +7,7 @@
 // ── Disk geometry ──────────────────────────────────────────────────────────────
 // All field names follow the cpmtools diskdef convention.
 
-struct DiskDef {
+struct disk_def {
     const char* name;
     uint32_t    seclen;     // physical sector size in bytes
     uint32_t    tracks;     // total number of tracks
@@ -49,7 +49,7 @@ struct DiskDef {
 
 // ── Known disk definitions ─────────────────────────────────────────────────────
 
-inline constexpr DiskDef DISK_FDD {
+inline constexpr disk_def DISK_FDD {
     "idpfdd",
     /*seclen*/    256,
     /*tracks*/    146,
@@ -60,7 +60,7 @@ inline constexpr DiskDef DISK_FDD {
     /*boottrk*/   2
 };
 
-inline constexpr DiskDef DISK_HDD {
+inline constexpr disk_def DISK_HDD {
     "idphdd",
     /*seclen*/    256,
     /*tracks*/    1224,
@@ -72,14 +72,14 @@ inline constexpr DiskDef DISK_HDD {
 };
 
 // Look up a definition by short name ("fdd"/"hdd") or full name ("idpfdd"/"idphdd").
-inline std::optional<DiskDef> find_diskdef(std::string_view name) noexcept {
+inline std::optional<disk_def> find_diskdef(std::string_view name) noexcept {
     if (name == "fdd" || name == "idpfdd") return DISK_FDD;
     if (name == "hdd" || name == "idphdd") return DISK_HDD;
     return std::nullopt;
 }
 
 // Detect disk type from image file size.
-inline std::optional<DiskDef> diskdef_by_size(uint64_t size) noexcept {
+inline std::optional<disk_def> diskdef_by_size(uint64_t size) noexcept {
     if (size == DISK_FDD.disk_size()) return DISK_FDD;
     if (size == DISK_HDD.disk_size()) return DISK_HDD;
     return std::nullopt;
@@ -87,10 +87,10 @@ inline std::optional<DiskDef> diskdef_by_size(uint64_t size) noexcept {
 
 // ── Geometry overrides ────────────────────────────────────────────────────────
 //
-// Holds optional per-field overrides that can be applied on top of any DiskDef.
+// Holds optional per-field overrides that can be applied on top of any disk_def.
 // Unset fields (std::nullopt) leave the base definition unchanged.
 
-struct GeoOpts {
+struct geo_opts {
     std::optional<uint32_t> seclen;
     std::optional<uint32_t> tracks;
     std::optional<uint32_t> sectrk;
@@ -110,7 +110,7 @@ struct GeoOpts {
     }
 
     // Apply the set fields to `def`, marking the name as "custom" if anything changed.
-    void apply_to(DiskDef& def) const noexcept {
+    void apply_to(disk_def& def) const noexcept {
         if (seclen)    def.seclen    = *seclen;
         if (tracks)    def.tracks    = *tracks;
         if (sectrk)    def.sectrk    = *sectrk;

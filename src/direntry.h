@@ -18,7 +18,7 @@
 //  16-31  AL    Allocation block list (1- or 2-byte block numbers)
 
 #pragma pack(push, 1)
-struct DirEntry {
+struct dir_entry {
     uint8_t user;     // ST
     uint8_t name[8];  // FN
     uint8_t ext[3];   // FT
@@ -30,22 +30,22 @@ struct DirEntry {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(DirEntry) == 32, "DirEntry must be exactly 32 bytes");
+static_assert(sizeof(dir_entry) == 32, "dir_entry must be exactly 32 bytes");
 
 // ── Predicates ────────────────────────────────────────────────────────────────
 
-inline bool entry_is_free(const DirEntry& e) noexcept  { return e.user == 0xE5; }
-inline bool entry_is_valid(const DirEntry& e) noexcept { return e.user <= 15; }
+inline bool entry_is_free(const dir_entry& e) noexcept  { return e.user == 0xE5; }
+inline bool entry_is_valid(const dir_entry& e) noexcept { return e.user <= 15; }
 
 // Logical extent number = XH[5:0] * 32 + XL[4:0]
-inline uint32_t extent_num(const DirEntry& e) noexcept {
+inline uint32_t extent_num(const dir_entry& e) noexcept {
     return uint32_t(e.xh & 0x3F) * 32u + uint32_t(e.xl & 0x1F);
 }
 
 // ── Name helpers ──────────────────────────────────────────────────────────────
 
 // Return bare "NAME" part (high attribute bits stripped, trailing spaces removed).
-inline std::string entry_stem(const DirEntry& e) {
+inline std::string entry_stem(const dir_entry& e) {
     std::string s;
     for (int i = 0; i < 8; ++i) {
         char c = char(e.name[i] & 0x7F);
@@ -56,7 +56,7 @@ inline std::string entry_stem(const DirEntry& e) {
 }
 
 // Return bare "EXT" part.
-inline std::string entry_extension(const DirEntry& e) {
+inline std::string entry_extension(const dir_entry& e) {
     std::string s;
     for (int i = 0; i < 3; ++i) {
         char c = char(e.ext[i] & 0x7F);
@@ -67,7 +67,7 @@ inline std::string entry_extension(const DirEntry& e) {
 }
 
 // Return "NAME.EXT" (no dot when extension is empty).
-inline std::string entry_filename(const DirEntry& e) {
+inline std::string entry_filename(const dir_entry& e) {
     std::string ext = entry_extension(e);
     return ext.empty() ? entry_stem(e) : entry_stem(e) + '.' + ext;
 }
