@@ -5,6 +5,7 @@ add_library(cpmdisk_lib SHARED
 
 set_target_properties(cpmdisk_lib PROPERTIES
     OUTPUT_NAME cpmdisk
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
 target_include_directories(cpmdisk_lib
