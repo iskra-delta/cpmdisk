@@ -10,39 +10,65 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  build-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: linux
+          - os: macos-latest
+            os_name: macos
+          - os: windows-latest
+            os_name: windows
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install GCC toolchain
+      - name: Install GCC toolchain (Linux)
+        if: matrix.os_name == 'linux'
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y gcc-13 g++-13 cmake ninja-build
 
-      - name: Build (GCC)
+      - name: Configure (Linux GCC)
+        if: matrix.os_name == 'linux'
         run: |
           set -euo pipefail
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-13 \
             -DCMAKE_CXX_COMPILER=g++-13
-          cmake --build build --target cpmdisk
 
-      - name: Package
-        id: package
+      - name: Configure (macOS/Windows)
+        if: matrix.os_name != 'linux'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target cpmdisk
+
+      - name: Package (Linux/macOS)
+        if: matrix.os_name != 'windows'
+        shell: bash
         run: |
           set -euo pipefail
 
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          ARCHIVE_NAME="cpmdisk-linux-x86_64-${VERSION}.tar.gz"
-          STAGE_DIR="release/cpmdisk-${VERSION}-linux-x86_64"
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH_RAW="$(uname -m)"
+          case "${ARCH_RAW}" in
+            x86_64|amd64) ARCH="x86_64" ;;
+            aarch64|arm64) ARCH="arm64" ;;
+            *) ARCH="${ARCH_RAW}" ;;
+          esac
+
+          PLATFORM="${{ matrix.os_name }}-${ARCH}"
+          STAGE_NAME="cpmdisk-${VERSION}-${PLATFORM}"
+          STAGE_DIR="release/${STAGE_NAME}"
+          ARCHIVE_NAME="cpmdisk-${PLATFORM}-${VERSION}.tar.gz"
 
           rm -rf release
           mkdir -p "${STAGE_DIR}"
@@ -53,25 +79,86 @@ jobs:
           {
             echo "cpmdisk ${VERSION}"
             echo
-            echo "Release package for cpmdisk (Linux x86_64)."
+            echo "Release package for cpmdisk (${PLATFORM})."
             echo
             echo "Contents:"
             echo "- cpmdisk"
             echo "- LICENSE"
           } > "${STAGE_DIR}/README-release.txt"
 
-          tar -C release -czf "release/${ARCHIVE_NAME}" "cpmdisk-${VERSION}-linux-x86_64"
+          tar -C release -czf "release/${ARCHIVE_NAME}" "${STAGE_NAME}"
 
-          echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "archive_path=release/${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+      - name: Package (Windows)
+        if: matrix.os_name == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $archRaw = $env:PROCESSOR_ARCHITECTURE
+          $arch = if ($archRaw -eq 'AMD64') { 'x86_64' } elseif ($archRaw -eq 'ARM64') { 'arm64' } else { $archRaw.ToLower() }
+
+          $platform = "windows-$arch"
+          $stageName = "cpmdisk-$version-$platform"
+          $stageDir = "release/$stageName"
+          $archiveName = "cpmdisk-$platform-$version.zip"
+
+          if (Test-Path release) { Remove-Item -Recurse -Force release }
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+          $exe = Get-ChildItem -Path bin -Filter cpmdisk.exe -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "cpmdisk.exe not found under bin/" }
+
+          Copy-Item $exe.FullName "$stageDir/cpmdisk.exe"
+          Copy-Item LICENSE "$stageDir/LICENSE"
+
+          @(
+            "cpmdisk $version"
+            ""
+            "Release package for cpmdisk ($platform)."
+            ""
+            "Contents:"
+            "- cpmdisk.exe"
+            "- LICENSE"
+          ) | Set-Content "$stageDir/README-release.txt"
+
+          Compress-Archive -Path "$stageDir/*" -DestinationPath "release/$archiveName"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os_name }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+
+  publish-release:
+    needs: build-package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Compute version
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "${GITHUB_OUTPUT}"
 
       - name: Generate release notes
         run: |
           set -euo pipefail
 
           TAG="${GITHUB_REF_NAME}"
-          VERSION="${{ steps.package.outputs.version }}"
+          VERSION="${TAG#v}"
           RELEASE_DATE="$(date -u '+%b %-d, %Y')"
           BODY_FILE="release/release-notes.txt"
           CHANGES_FILE="release/changes.txt"
@@ -94,31 +181,14 @@ jobs:
             cat "${CHANGES_FILE}"
             echo
             echo "Assets"
-            echo "- ${{ steps.package.outputs.archive_name }}"
+            ls -1 release/*.tar.gz release/*.zip 2>/dev/null | sed 's#^release/#- #' || true
           } > "${BODY_FILE}"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: v${{ steps.package.outputs.version }}
+          name: v${{ steps.meta.outputs.version }}
           body_path: release/release-notes.txt
           files: |
-            ${{ steps.package.outputs.archive_path }}
-
-  build-portability:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --config Release --target cpmdisk
+            release/*.tar.gz
+            release/*.zip
