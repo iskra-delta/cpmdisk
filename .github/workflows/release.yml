@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GCC toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 cmake ninja-build
+
+      - name: Build (GCC)
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-13 \
+            -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build --target cpmdisk
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          ARCHIVE_NAME="cpmdisk-linux-x86_64-${VERSION}.tar.gz"
+          STAGE_DIR="release/cpmdisk-${VERSION}-linux-x86_64"
+
+          rm -rf release
+          mkdir -p "${STAGE_DIR}"
+
+          cp "bin/cpmdisk" "${STAGE_DIR}/"
+          cp LICENSE "${STAGE_DIR}/LICENSE"
+
+          {
+            echo "cpmdisk ${VERSION}"
+            echo
+            echo "Release package for cpmdisk (Linux x86_64)."
+            echo
+            echo "Contents:"
+            echo "- cpmdisk"
+            echo "- LICENSE"
+          } > "${STAGE_DIR}/README-release.txt"
+
+          tar -C release -czf "release/${ARCHIVE_NAME}" "cpmdisk-${VERSION}-linux-x86_64"
+
+          echo "archive_name=${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "archive_path=release/${ARCHIVE_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${{ steps.package.outputs.version }}"
+          RELEASE_DATE="$(date -u '+%b %-d, %Y')"
+          BODY_FILE="release/release-notes.txt"
+          CHANGES_FILE="release/changes.txt"
+
+          PREV_TAG="$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)"
+          if [ -n "${PREV_TAG}" ]; then
+            git log --no-merges --pretty='- %s' "${PREV_TAG}..${TAG}" > "${CHANGES_FILE}" || true
+          else
+            git log --no-merges --pretty='- %s' "${TAG}" > "${CHANGES_FILE}" || true
+          fi
+          if [ ! -s "${CHANGES_FILE}" ]; then
+            printf '%s\n' "- Maintenance release" > "${CHANGES_FILE}"
+          fi
+
+          {
+            echo "v${VERSION}"
+            echo "Released ${RELEASE_DATE}"
+            echo
+            echo "What's changed"
+            cat "${CHANGES_FILE}"
+            echo
+            echo "Assets"
+            echo "- ${{ steps.package.outputs.archive_name }}"
+          } > "${BODY_FILE}"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.package.outputs.version }}
+          body_path: release/release-notes.txt
+          files: |
+            ${{ steps.package.outputs.archive_path }}
+
+  build-portability:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target cpmdisk
