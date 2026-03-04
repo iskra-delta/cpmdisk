@@ -11,7 +11,7 @@ It supports the Partner's known floppy and hard disk geometries and can also wor
 This project is intentionally split into two parts:
 
 - Frontend: `cpmdisk` CLI in `src/main.cpp` (argument parsing and UX).
-- Backend: shared CP/M library target `cpmdisk_lib` (artifact: `libcpmdisk.*` / `cpmdisk.dll`) in `lib/`, with public headers in `include/cpm/`.
+- Backend: shared CP/M library target `cpmdisk_lib` (artifact: `libcpmdisk.*` / `cpmdisk.dll`) in `lib/`, with public headers in `include/cpmdisk/`.
 
 You can freely reuse the backend library in your own CP/M project without using this CLI.
 The frontend in this repository is the reference consumer of that backend API, so practical backend usage examples are in `src/main.cpp`.
@@ -75,9 +75,10 @@ cmake --build build -j4
 
 Public headers:
 
-- `include/cpm/cpm_disk.h`
-- `include/cpm/diskdef.h`
-- `include/cpm/direntry.h`
+- `include/cpmdisk/cpmdisk.h` (umbrella include)
+- `include/cpmdisk/cpm_disk.h`
+- `include/cpmdisk/diskdef.h`
+- `include/cpmdisk/direntry.h`
 
 In CMake-based projects, link against `cpmdisk_lib` and include `cpm/...` headers.
 For concrete call flows, see `src/main.cpp`: each CLI subcommand maps directly to backend library calls.

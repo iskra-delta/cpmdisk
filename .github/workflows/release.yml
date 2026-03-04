@@ -79,6 +79,7 @@ jobs:
           else
             cp "bin/libcpmdisk.dylib" "${STAGE_DIR}/"
           fi
+          cp -R "include" "${STAGE_DIR}/include"
           cp LICENSE "${STAGE_DIR}/LICENSE"
 
           {
@@ -93,6 +94,8 @@ jobs:
             else
               echo "- libcpmdisk.dylib"
             fi
+            echo "- include/cpmdisk/cpmdisk.h"
+            echo "- include/cpmdisk/*.h"
             echo "- LICENSE"
           } > "${STAGE_DIR}/README-release.txt"
 
@@ -125,6 +128,7 @@ jobs:
           Copy-Item $exe.FullName "$stageDir/cpmdisk.exe"
           Copy-Item $dll.FullName "$stageDir/cpmdisk.dll"
           if ($implib) { Copy-Item $implib.FullName "$stageDir/cpmdisk.lib" }
+          Copy-Item -Recurse include "$stageDir/include"
           Copy-Item LICENSE "$stageDir/LICENSE"
 
           @(
@@ -136,6 +140,8 @@ jobs:
             "- cpmdisk.exe"
             "- cpmdisk.dll"
             if ($implib) { "- cpmdisk.lib" }
+            "- include/cpmdisk/cpmdisk.h"
+            "- include/cpmdisk/*.h"
             "- LICENSE"
           ) | Set-Content "$stageDir/README-release.txt"
 

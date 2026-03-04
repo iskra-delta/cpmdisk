@@ -1,4 +1,4 @@
-#include <cpm/cpm_disk.h>
+#include <cpmdisk/cpm_disk.h>
 #include "print_compat.h"
 
 #include <CLI/CLI.hpp>

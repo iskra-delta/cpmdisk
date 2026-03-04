@@ -1,7 +1,7 @@
 #pragma once
 
-#include "diskdef.h"
-#include "direntry.h"
+#include "cpmdisk/diskdef.h"
+#include "cpmdisk/direntry.h"
 
 #include <filesystem>
 #include <fstream>
