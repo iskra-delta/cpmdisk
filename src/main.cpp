@@ -178,7 +178,7 @@ int main(int argc, char* argv[]) {
 
             DiskDef def = resolve_create_def(create_type, create_geo);
             CpmDisk::create(p, def);
-            println("Created {} image '{}': {} tracks x {} sec/trk x {} B = {} bytes",
+            pc::println("Created {} image '{}': {} tracks x {} sec/trk x {} B = {} bytes",
                 def.name, create_path,
                 def.tracks, def.sectrk, def.seclen,
                 def.disk_size());
@@ -211,7 +211,7 @@ int main(int argc, char* argv[]) {
         }
 
     } catch (const std::exception& ex) {
-        println(stderr, "error: {}", ex.what());
+        pc::println(stderr, "error: {}", ex.what());
         return 1;
     }
 

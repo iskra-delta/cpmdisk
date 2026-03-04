@@ -10,7 +10,10 @@ add_executable(cpmdisk
 target_link_libraries(cpmdisk PRIVATE CLI11::CLI11)
 
 target_compile_options(cpmdisk PRIVATE
-    -Wall -Wextra -Wpedantic
-    $<$<CONFIG:Debug>:   -g3 -O0 -DDEBUG>
-    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
+    $<$<AND:$<CONFIG:Debug>,$<CXX_COMPILER_ID:MSVC>>:/Zi /Od /DDEBUG>
+    $<$<AND:$<CONFIG:Release>,$<CXX_COMPILER_ID:MSVC>>:/O2 /DNDEBUG>
+    $<$<AND:$<CONFIG:Debug>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-g3 -O0 -DDEBUG>
+    $<$<AND:$<CONFIG:Release>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-O2 -DNDEBUG>
 )

@@ -7,6 +7,8 @@
 #include <format>
 #include <string>
 
+namespace pc {
+
 template<typename... Args>
 inline void println(std::format_string<Args...> fmt, Args&&... args) {
     std::string s = std::format(fmt, std::forward<Args>(args)...);
@@ -21,5 +23,7 @@ inline void println(std::FILE* f, std::format_string<Args...> fmt, Args&&... arg
 }
 
 // Zero-argument overloads for blank lines.
-inline void println()                      { std::putchar('\n'); }
-inline void println(std::FILE* f)          { std::fputc('\n', f); }
+inline void println()             { std::putchar('\n'); }
+inline void println(std::FILE* f) { std::fputc('\n', f); }
+
+} // namespace pc

@@ -227,29 +227,29 @@ void CpmDisk::cmd_info() {
     uint32_t used_dir  = 0;
     for (const auto& e : dir) if (entry_is_valid(e)) ++used_dir;
 
-    println("Disk image : {}", path_.string());
-    println("Disk type  : {}", def_.name);
-    println("");
-    println("Geometry");
-    println("  Tracks          : {}", def_.tracks);
-    println("  Sectors / track : {}", def_.sectrk);
-    println("  Sector size     : {} bytes", def_.seclen);
-    println("  Boot tracks     : {}", def_.boottrk);
-    println("  Block size      : {} bytes", def_.blocksize);
-    println("  Total blocks    : {}", def_.total_blocks());
-    println("  Directory blocks: {}", def_.dir_blocks());
-    println("  Disk size       : {} ({})", def_.disk_size(), human_size(def_.disk_size()));
-    println("");
-    println("Directory");
-    println("  Capacity        : {} entries", def_.maxdir);
-    println("  Used            : {}", used_dir);
-    println("  Free            : {}", def_.maxdir - used_dir);
-    println("");
-    println("Allocation");
-    println("  Total blocks    : {}", def_.total_blocks());
-    println("  Used blocks     : {}", used.size());
-    println("  Free blocks     : {}", free_blk);
-    println("  Free space      : {} ({})",
+    pc::println("Disk image : {}", path_.string());
+    pc::println("Disk type  : {}", def_.name);
+    pc::println("");
+    pc::println("Geometry");
+    pc::println("  Tracks          : {}", def_.tracks);
+    pc::println("  Sectors / track : {}", def_.sectrk);
+    pc::println("  Sector size     : {} bytes", def_.seclen);
+    pc::println("  Boot tracks     : {}", def_.boottrk);
+    pc::println("  Block size      : {} bytes", def_.blocksize);
+    pc::println("  Total blocks    : {}", def_.total_blocks());
+    pc::println("  Directory blocks: {}", def_.dir_blocks());
+    pc::println("  Disk size       : {} ({})", def_.disk_size(), human_size(def_.disk_size()));
+    pc::println("");
+    pc::println("Directory");
+    pc::println("  Capacity        : {} entries", def_.maxdir);
+    pc::println("  Used            : {}", used_dir);
+    pc::println("  Free            : {}", def_.maxdir - used_dir);
+    pc::println("");
+    pc::println("Allocation");
+    pc::println("  Total blocks    : {}", def_.total_blocks());
+    pc::println("  Used blocks     : {}", used.size());
+    pc::println("  Free blocks     : {}", free_blk);
+    pc::println("  Free space      : {} ({})",
         uint64_t(free_blk) * def_.blocksize,
         human_size(uint64_t(free_blk) * def_.blocksize));
 }
@@ -279,24 +279,24 @@ void CpmDisk::cmd_list(int user) {
     }
 
     if (files.empty()) {
-        println("No files found.");
+        pc::println("No files found.");
         return;
     }
 
     constexpr uint32_t EXTENT_BYTES = 128u * 128u; // 16 384 bytes per extent
 
-    println("{:>4}  {:<12}  {:>10}  {:>10}", "User", "Name", "Size", "");
-    println("{:->4}  {:-<12}  {:->10}  {:->10}", "", "", "", "");
+    pc::println("{:>4}  {:<12}  {:>10}  {:>10}", "User", "Name", "Size", "");
+    pc::println("{:->4}  {:-<12}  {:->10}  {:->10}", "", "", "", "");
 
     for (const auto& [key, acc] : files) {
         auto [u, fname] = key;
         uint64_t size = uint64_t(acc.max_ext) * EXTENT_BYTES
                       + uint64_t(acc.last_rc) * 128u;
-        println("{:>4}  {:<12}  {:>10}  {:>10}",
+        pc::println("{:>4}  {:<12}  {:>10}  {:>10}",
             u, fname, size, human_size(size));
     }
-    println("");
-    println("{} file(s)", files.size());
+    pc::println("");
+    pc::println("{} file(s)", files.size());
 }
 
 // ── cmd_add ───────────────────────────────────────────────────────────────────
@@ -407,7 +407,7 @@ void CpmDisk::cmd_add(const std::filesystem::path& host_path, int user) {
     while (!display_ext.empty() && display_ext.back() == ' ') display_ext.pop_back();
     if (!display_ext.empty()) display_name += '.' + display_ext;
 
-    println("Added  {:>4}:{}  ({}, {} block(s))",
+    pc::println("Added  {:>4}:{}  ({}, {} block(s))",
         user, display_name, human_size(file_size), blocks_needed);
 }
 
@@ -424,16 +424,16 @@ void CpmDisk::cmd_remove(const std::string& pattern, int user) {
 
         std::string fname = to_upper(entry_filename(e));
         if (wildcard_match(up_pattern, fname)) {
-            println("Removing {:>4}:{}", int(e.user), entry_filename(e));
+            pc::println("Removing {:>4}:{}", int(e.user), entry_filename(e));
             e.user = 0xE5;  // mark all extents of this file as deleted
             ++removed;
         }
     }
 
     if (removed == 0)
-        println("No files matched '{}'.", pattern);
+        pc::println("No files matched '{}'.", pattern);
     else {
         write_dir(dir);
-        println("Removed {} directory entr{}.", removed, removed == 1 ? "y" : "ies");
+        pc::println("Removed {} directory entr{}.", removed, removed == 1 ? "y" : "ies");
     }
 }
