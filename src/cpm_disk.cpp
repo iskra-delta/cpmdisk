@@ -92,7 +92,9 @@ cpm_disk::cpm_disk(std::filesystem::path path, disk_def def)
 
 // ── Factory: create ───────────────────────────────────────────────────────────
 
-cpm_disk cpm_disk::create(const std::filesystem::path& path, const disk_def& def) {
+cpm_disk cpm_disk::create(const std::filesystem::path& path,
+                          const disk_def& def,
+                          const create_opts& opts) {
     // Write the blank image (all zeros).
     {
         std::ofstream f(path, std::ios::binary | std::ios::trunc);
@@ -120,6 +122,35 @@ cpm_disk cpm_disk::create(const std::filesystem::path& path, const disk_def& def
     std::vector<uint8_t> e5(dir_area, 0xE5u);
     disk.file_.seekp(std::streamoff(def.block_offset(0)));
     disk.file_.write(reinterpret_cast<const char*>(e5.data()), std::streamsize(dir_area));
+
+    if (!opts.label.empty() || opts.datestamp) {
+        auto dir = disk.read_dir();
+        size_t slot = 0;
+
+        if (!opts.label.empty()) {
+            if (slot >= dir.size())
+                throw std::runtime_error("CP/M 3 label requested but no directory slots available");
+
+            auto [lbl_name, lbl_ext] = to_cpm_83(opts.label);
+            std::memset(&dir[slot], 0, sizeof(dir_entry));
+            dir[slot].user = 0x20; // CP/M 3 label marker entry
+            std::memcpy(dir[slot].name, lbl_name.data(), 8);
+            std::memcpy(dir[slot].ext,  lbl_ext.data(),  3);
+            ++slot;
+        }
+
+        if (opts.datestamp) {
+            if (slot >= dir.size())
+                throw std::runtime_error("CP/M 3 datestamp requested but no directory slots available");
+
+            std::memset(&dir[slot], 0, sizeof(dir_entry));
+            dir[slot].user = 0x21; // CP/M 3 datestamp marker entry
+            ++slot;
+        }
+
+        disk.write_dir(dir);
+    }
+
     disk.file_.flush();
     return disk;
 }
@@ -223,9 +254,15 @@ void cpm_disk::cmd_info() {
     auto dir  = read_dir();
     auto used = used_blocks(dir);
 
-    uint32_t free_blk  = def_.total_blocks() - uint32_t(used.size());
-    uint32_t used_dir  = 0;
-    for (const auto& e : dir) if (entry_is_valid(e)) ++used_dir;
+    uint32_t free_blk   = def_.total_blocks() - uint32_t(used.size());
+    uint32_t file_dir   = 0;
+    uint32_t free_dir   = 0;
+    uint32_t cpm3_meta  = 0;
+    for (const auto& e : dir) {
+        if (entry_is_valid(e)) ++file_dir;
+        else if (entry_is_free(e)) ++free_dir;
+        else if (e.user == 0x20 || e.user == 0x21) ++cpm3_meta;
+    }
 
     pc::println("Disk image : {}", path_.string());
     pc::println("Disk type  : {}", def_.name);
@@ -242,8 +279,10 @@ void cpm_disk::cmd_info() {
     pc::println("");
     pc::println("Directory");
     pc::println("  Capacity        : {} entries", def_.maxdir);
-    pc::println("  Used            : {}", used_dir);
-    pc::println("  Free            : {}", def_.maxdir - used_dir);
+    pc::println("  Used (files)    : {}", file_dir);
+    if (cpm3_meta > 0)
+        pc::println("  Used (CP/M 3)   : {}", cpm3_meta);
+    pc::println("  Free            : {}", free_dir);
     pc::println("");
     pc::println("Allocation");
     pc::println("  Total blocks    : {}", def_.total_blocks());

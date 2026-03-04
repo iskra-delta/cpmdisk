@@ -68,6 +68,13 @@ static std::optional<disk_def> resolve_open_hint(const std::string& fmt, const g
     return def;
 }
 
+static create_opts resolve_create_opts(const std::string& label, bool datestamp) {
+    return create_opts{
+        .label = label,
+        .datestamp = datestamp
+    };
+}
+
 // ── main ──────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
@@ -87,7 +94,9 @@ int main(int argc, char* argv[]) {
 
     // ── create ────────────────────────────────────────────────────────────────
     std::string create_path, create_type;
-    geo_opts     create_geo;
+    geo_opts    create_geo;
+    std::string create_label;
+    bool        create_datestamp = false;
     {
         auto* cmd = app.add_subcommand("create",
             "Create a new blank disk image.\n"
@@ -98,6 +107,10 @@ int main(int argc, char* argv[]) {
         cmd->add_option("disk", create_path, "Output .dsk file path")->required();
         cmd->add_option("type", create_type,
             "Base disk type: fdd or hdd (optional when all geometry flags are given)");
+        cmd->add_option("--label", create_label,
+            "CP/M 3 disk label in 8.3 form (for example PARTNER or DATA.DISK)");
+        cmd->add_flag("--datestamp", create_datestamp,
+            "CP/M 3: reserve directory datestamp metadata marker");
         add_geo_options(cmd, create_geo);
     }
 
@@ -177,8 +190,9 @@ int main(int argc, char* argv[]) {
                     "'{}' already exists; remove it first", create_path));
 
             disk_def def = resolve_create_def(create_type, create_geo);
-            cpm_disk::create(p, def);
-            pc::println("Created {} image '{}': {} tracks x {} sec/trk x {} B = {} bytes",
+            create_opts opts = resolve_create_opts(create_label, create_datestamp);
+            cpm_disk::create(p, def, opts);
+            pc::println("Created {} image '{}': CP/M 3, {} tracks x {} sec/trk x {} B = {} bytes",
                 def.name, create_path,
                 def.tracks, def.sectrk, def.seclen,
                 def.disk_size());

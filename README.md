@@ -69,6 +69,12 @@ cpmdisk create boot.dsk fdd
 cpmdisk create hdd.dsk hdd
 ```
 
+Create CP/M 3 directory markers:
+
+```bash
+cpmdisk create boot3.dsk fdd --label PARTNER --datestamp
+```
+
 Custom geometry (type omitted):
 
 ```bash
@@ -134,6 +140,9 @@ All commands support geometry overrides:
 Rules:
 
 - For `create`: provide either a named type (`fdd`/`hdd`) or all required geometry fields.
+- `create` for Iskra Delta Partner disks uses CP/M 3 conventions by default.
+- `--label` and `--datestamp` add CP/M 3 directory metadata entries.
+- `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
 - For `info/list/add/remove`: geometry is auto-detected by image size if no hint is supplied.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
 

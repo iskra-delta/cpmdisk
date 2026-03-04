@@ -11,6 +11,11 @@
 #include <string>
 #include <vector>
 
+struct create_opts {
+    std::string label;         // CP/M 3 disk label (8.3 style)
+    bool        datestamp{false}; // CP/M 3 directory datestamp metadata marker
+};
+
 // ── cpm_disk ────────────────────────────────────────────────────────────────────
 //
 // Provides create / open factory methods and the four user-facing commands:
@@ -25,7 +30,9 @@ public:
     // ── Factory ───────────────────────────────────────────────────────────────
 
     // Create a new, blank disk image (filled with 0x00; directory with 0xE5).
-    static cpm_disk create(const std::filesystem::path& path, const disk_def& def);
+    static cpm_disk create(const std::filesystem::path& path,
+                           const disk_def& def,
+                           const create_opts& opts = {});
 
     // Open an existing disk image.
     // If `hint` is provided it is used directly; otherwise the type is inferred
