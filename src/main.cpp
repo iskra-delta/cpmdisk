@@ -45,6 +45,10 @@ static disk_def resolve_create_def(const std::string& type, const geo_opts& geo)
     return def;
 }
 
+static bool is_partner_type(std::string_view type) {
+    return type == "fdd" || type == "hdd" || type == "idpfdd" || type == "idphdd";
+}
+
 // Resolve the optional disk_def hint for open commands.
 // Returns nullopt to trigger size-based auto-detection when nothing is specified.
 static std::optional<disk_def> resolve_open_hint(const std::string& fmt, const geo_opts& geo) {
@@ -68,8 +72,14 @@ static std::optional<disk_def> resolve_open_hint(const std::string& fmt, const g
     return def;
 }
 
-static create_opts resolve_create_opts(const std::string& label, bool datestamp) {
+static create_opts resolve_create_opts(bool cpm3, const std::string& label, bool datestamp) {
+    if (!cpm3 && (!label.empty() || datestamp))
+        throw std::runtime_error(
+            "create: --label and --datestamp are only valid in CP/M 3 mode "
+            "(partner type by default, or pass --cpm3)");
+
     return create_opts{
+        .cpm3 = cpm3,
         .label = label,
         .datestamp = datestamp
     };
@@ -95,6 +105,7 @@ int main(int argc, char* argv[]) {
     // ── create ────────────────────────────────────────────────────────────────
     std::string create_path, create_type;
     geo_opts    create_geo;
+    bool        create_cpm3 = false;
     std::string create_label;
     bool        create_datestamp = false;
     {
@@ -107,6 +118,8 @@ int main(int argc, char* argv[]) {
         cmd->add_option("disk", create_path, "Output .dsk file path")->required();
         cmd->add_option("type", create_type,
             "Base disk type: fdd or hdd (optional when all geometry flags are given)");
+        cmd->add_flag("--cpm3", create_cpm3,
+            "Enable CP/M 3 mode (needed for custom geometry; partner types default to CP/M 3)");
         cmd->add_option("--label", create_label,
             "CP/M 3 disk label in 8.3 form (for example PARTNER or DATA.DISK)");
         cmd->add_flag("--datestamp", create_datestamp,
@@ -189,11 +202,14 @@ int main(int argc, char* argv[]) {
                 throw std::runtime_error(std::format(
                     "'{}' already exists; remove it first", create_path));
 
+            bool partner_default_cpm3 = is_partner_type(create_type);
             disk_def def = resolve_create_def(create_type, create_geo);
-            create_opts opts = resolve_create_opts(create_label, create_datestamp);
+            create_opts opts = resolve_create_opts(partner_default_cpm3 || create_cpm3,
+                                                   create_label, create_datestamp);
             cpm_disk::create(p, def, opts);
-            pc::println("Created {} image '{}': CP/M 3, {} tracks x {} sec/trk x {} B = {} bytes",
+            pc::println("Created {} image '{}': CP/M {}, {} tracks x {} sec/trk x {} B = {} bytes",
                 def.name, create_path,
+                opts.cpm3 ? 3 : 2,
                 def.tracks, def.sectrk, def.seclen,
                 def.disk_size());
         }

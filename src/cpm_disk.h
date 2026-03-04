@@ -12,6 +12,7 @@
 #include <vector>
 
 struct create_opts {
+    bool        cpm3{false}; // effective directory convention
     std::string label;         // CP/M 3 disk label (8.3 style)
     bool        datestamp{false}; // CP/M 3 directory datestamp metadata marker
 };

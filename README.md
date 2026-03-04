@@ -75,6 +75,14 @@ Create CP/M 3 directory markers:
 cpmdisk create boot3.dsk fdd --label PARTNER --datestamp
 ```
 
+Enable CP/M 3 on custom geometry:
+
+```bash
+cpmdisk create custom3.dsk --cpm3 \
+  --seclen 256 --tracks 80 --sectrk 9 \
+  --blocksize 2048 --maxdir 64 --boottrk 2
+```
+
 Custom geometry (type omitted):
 
 ```bash
@@ -140,8 +148,9 @@ All commands support geometry overrides:
 Rules:
 
 - For `create`: provide either a named type (`fdd`/`hdd`) or all required geometry fields.
-- `create` for Iskra Delta Partner disks uses CP/M 3 conventions by default.
-- `--label` and `--datestamp` add CP/M 3 directory metadata entries.
+- Partner types (`fdd`, `hdd`, `idpfdd`, `idphdd`) default to CP/M 3 mode.
+- Custom geometry defaults to CP/M 2.2 mode; pass `--cpm3` to enable CP/M 3 mode.
+- `--label` and `--datestamp` require CP/M 3 mode and add CP/M 3 directory metadata entries.
 - `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
 - For `info/list/add/remove`: geometry is auto-detected by image size if no hint is supplied.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
