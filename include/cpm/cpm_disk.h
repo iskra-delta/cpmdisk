@@ -72,6 +72,9 @@ public:
     // Read/write reserved boot+system track area.
     void cmd_boot_read(const std::filesystem::path& out_path);
     void cmd_boot_write(const std::filesystem::path& in_path);
+    void cmd_sysgen(const std::filesystem::path& in_path,
+                    uint32_t offset_sectors = 0,
+                    bool keep_rest = false);
 
     // Delete all directory entries whose "NAME.EXT" matches the wildcard
     // pattern (* and ? supported).  Pass user >= 0 to restrict; -1 = all.

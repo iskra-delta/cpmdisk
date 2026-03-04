@@ -1,4 +1,4 @@
-#include "cpm_disk.h"
+#include <cpm/cpm_disk.h>
 #include "print_compat.h"
 
 #include <CLI/CLI.hpp>
@@ -319,6 +319,28 @@ int main(int argc, char* argv[]) {
         add_geo_options(cmd, bw_geo);
     }
 
+    // ── sysgen ────────────────────────────────────────────────────────────────
+    std::string sg_path, sg_fmt, sg_in;
+    uint32_t    sg_offset_sectors = 0;
+    bool        sg_keep_rest = false;
+    geo_opts    sg_geo;
+    std::string sg_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("sysgen",
+            "Write a CP/M system image into reserved boot/system tracks.\n"
+            "By default, writes at sector 0 and clears the rest of boot area.");
+        cmd->add_option("disk", sg_path, "Disk image file")->required();
+        cmd->add_option("sys", sg_in, "Host CP/M system image binary")->required();
+        cmd->add_option("-f,--format", sg_fmt, "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", sg_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        cmd->add_option("--offset-sectors", sg_offset_sectors,
+            "Start writing at this sector within reserved boot area");
+        cmd->add_flag("--keep-rest", sg_keep_rest,
+            "Keep existing bytes outside written system image region");
+        add_geo_options(cmd, sg_geo);
+    }
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -404,6 +426,13 @@ int main(int argc, char* argv[]) {
             auto disk = cpm_disk::open({bw_path},
                                        resolve_open_hint(bw_fmt, bw_geo, bw_diskdefs));
             disk.cmd_boot_write(std::filesystem::path{bw_in});
+        }
+
+        // ── sysgen ────────────────────────────────────────────────────────────
+        else if (app.got_subcommand("sysgen")) {
+            auto disk = cpm_disk::open({sg_path},
+                                       resolve_open_hint(sg_fmt, sg_geo, sg_diskdefs));
+            disk.cmd_sysgen(std::filesystem::path{sg_in}, sg_offset_sectors, sg_keep_rest);
         }
 
     } catch (const std::exception& ex) {

@@ -74,6 +74,11 @@ jobs:
           mkdir -p "${STAGE_DIR}"
 
           cp "bin/cpmdisk" "${STAGE_DIR}/"
+          if [ "${{ matrix.os_name }}" = "linux" ]; then
+            cp "bin/libcpmdisk.so" "${STAGE_DIR}/"
+          else
+            cp "bin/libcpmdisk.dylib" "${STAGE_DIR}/"
+          fi
           cp LICENSE "${STAGE_DIR}/LICENSE"
 
           {
@@ -83,6 +88,11 @@ jobs:
             echo
             echo "Contents:"
             echo "- cpmdisk"
+            if [ "${{ matrix.os_name }}" = "linux" ]; then
+              echo "- libcpmdisk.so"
+            else
+              echo "- libcpmdisk.dylib"
+            fi
             echo "- LICENSE"
           } > "${STAGE_DIR}/README-release.txt"
 
@@ -108,8 +118,13 @@ jobs:
 
           $exe = Get-ChildItem -Path bin -Filter cpmdisk.exe -Recurse | Select-Object -First 1
           if (-not $exe) { throw "cpmdisk.exe not found under bin/" }
+          $dll = Get-ChildItem -Path bin -Filter cpmdisk.dll -Recurse | Select-Object -First 1
+          if (-not $dll) { throw "cpmdisk.dll not found under bin/" }
+          $implib = Get-ChildItem -Path bin -Filter cpmdisk.lib -Recurse | Select-Object -First 1
 
           Copy-Item $exe.FullName "$stageDir/cpmdisk.exe"
+          Copy-Item $dll.FullName "$stageDir/cpmdisk.dll"
+          if ($implib) { Copy-Item $implib.FullName "$stageDir/cpmdisk.lib" }
           Copy-Item LICENSE "$stageDir/LICENSE"
 
           @(
@@ -119,6 +134,8 @@ jobs:
             ""
             "Contents:"
             "- cpmdisk.exe"
+            "- cpmdisk.dll"
+            if ($implib) { "- cpmdisk.lib" }
             "- LICENSE"
           ) | Set-Content "$stageDir/README-release.txt"
 

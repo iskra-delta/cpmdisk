@@ -13,6 +13,8 @@ endif()
 
 # ── Output directory ──────────────────────────────────────────────────────────
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin")
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
 include(FetchContent)
@@ -26,6 +28,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(CLI11)
 
 # ── Sources ───────────────────────────────────────────────────────────────────
+add_subdirectory(lib)
 add_subdirectory(src)
 
 # ── Status ────────────────────────────────────────────────────────────────────

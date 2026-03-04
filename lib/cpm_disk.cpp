@@ -1,4 +1,4 @@
-#include "cpm_disk.h"
+#include <cpm/cpm_disk.h>
 #include "print_compat.h"
 
 #include <algorithm>
@@ -745,6 +745,62 @@ void cpm_disk::cmd_boot_write(const std::filesystem::path& in_path) {
         throw std::runtime_error("failed to write boot/system track area");
 
     pc::println("Updated boot/system area ({} bytes) from '{}'", boot_bytes, in_path.string());
+}
+
+void cpm_disk::cmd_sysgen(const std::filesystem::path& in_path,
+                          uint32_t offset_sectors,
+                          bool keep_rest) {
+    uint64_t boot_sectors = def_.boot_sectors();
+    uint64_t boot_bytes = boot_sectors * def_.seclen;
+    if (boot_bytes == 0)
+        throw std::runtime_error("this disk format has no reserved boot tracks");
+
+    if (offset_sectors >= boot_sectors)
+        throw std::runtime_error(std::format(
+            "offset sector {} is outside boot area ({} sectors)",
+            offset_sectors, boot_sectors));
+
+    if (!std::filesystem::exists(in_path))
+        throw std::runtime_error(std::format("'{}': file not found", in_path.string()));
+
+    uint64_t src_size = std::filesystem::file_size(in_path);
+    uint64_t start = uint64_t(offset_sectors) * def_.seclen;
+    uint64_t max_payload = boot_bytes - start;
+    if (src_size > max_payload)
+        throw std::runtime_error(std::format(
+            "'{}': {} bytes do not fit boot area from sector {} (max {} bytes)",
+            in_path.string(), src_size, offset_sectors, max_payload));
+
+    std::vector<uint8_t> boot_img(boot_bytes, 0x00);
+    if (keep_rest) {
+        file_.seekg(0);
+        file_.read(reinterpret_cast<char*>(boot_img.data()), std::streamsize(boot_img.size()));
+        if (!file_)
+            throw std::runtime_error("failed to read existing boot/system area");
+    }
+
+    std::vector<uint8_t> src(src_size);
+    {
+        std::ifstream in(in_path, std::ios::binary);
+        if (!in)
+            throw std::runtime_error(std::format("cannot open '{}' for reading", in_path.string()));
+        if (!src.empty())
+            in.read(reinterpret_cast<char*>(src.data()), std::streamsize(src.size()));
+        if (!in && !src.empty())
+            throw std::runtime_error(std::format("failed to read '{}'", in_path.string()));
+    }
+
+    if (!src.empty())
+        std::copy(src.begin(), src.end(), boot_img.begin() + std::ptrdiff_t(start));
+
+    file_.seekp(0);
+    file_.write(reinterpret_cast<const char*>(boot_img.data()), std::streamsize(boot_img.size()));
+    file_.flush();
+    if (!file_)
+        throw std::runtime_error("failed to write boot/system track area");
+
+    pc::println("SYSGEN wrote {} bytes from '{}' at boot sector {} (boot area {} bytes, keep_rest={})",
+        src_size, in_path.string(), offset_sectors, boot_bytes, keep_rest ? "yes" : "no");
 }
 
 // ── cmd_remove ────────────────────────────────────────────────────────────────

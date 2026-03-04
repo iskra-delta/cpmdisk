@@ -1,8 +1,20 @@
+[![status.badge]][status.url] [![language.badge]][language.url] [![standard.badge]][standard.url] [![license.badge]][license.url]
+
 # cpmdisk
 
 `cpmdisk` is a command-line tool for creating and managing CP/M disk images used by the Iskra Delta Partner.
 
 It supports the Partner's known floppy and hard disk geometries and can also work with fully custom geometries when all required parameters are supplied.
+
+## Architecture
+
+This project is intentionally split into two parts:
+
+- Frontend: `cpmdisk` CLI in `src/main.cpp` (argument parsing and UX).
+- Backend: shared CP/M library target `cpmdisk_lib` (artifact: `libcpmdisk.*` / `cpmdisk.dll`) in `lib/`, with public headers in `include/cpm/`.
+
+You can freely reuse the backend library in your own CP/M project without using this CLI.
+The frontend in this repository is the reference consumer of that backend API, so practical backend usage examples are in `src/main.cpp`.
 
 ## Current scope
 
@@ -18,6 +30,7 @@ Implemented commands:
 - `remove`: delete by wildcard pattern (`*`, `?`)
 - `bootread`: export reserved boot/system tracks
 - `bootwrite`: import reserved boot/system tracks
+- `sysgen`: place CP/M system image into boot/system tracks
 
 ## Disk formats
 
@@ -46,6 +59,11 @@ cmake --build build -j4
 ./bin/cpmdisk --help
 ```
 
+This builds:
+
+- `cpmdisk_lib` shared library target (artifact name: `libcpmdisk.*` / `cpmdisk.dll`)
+- `cpmdisk` CLI executable (argument parsing/front-end)
+
 Release build:
 
 ```bash
@@ -53,11 +71,49 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 ```
 
+## Using The Library
+
+Public headers:
+
+- `include/cpm/cpm_disk.h`
+- `include/cpm/diskdef.h`
+- `include/cpm/direntry.h`
+
+In CMake-based projects, link against `cpmdisk_lib` and include `cpm/...` headers.
+For concrete call flows, see `src/main.cpp`: each CLI subcommand maps directly to backend library calls.
+
 ## CLI overview
 
 ```text
 cpmdisk <command> <disk> [options]
 ```
+
+`disk` is always the `.dsk` image path.  
+Most commands also accept either:
+
+- automatic geometry detection (default), or
+- explicit geometry/type hints via `-f/--format`, `--diskdefs`, or geometry flags.
+
+## Parameter quick reference
+
+Common options (many commands):
+
+- `-f, --format <name>`: force a named geometry (`fdd`, `hdd`, or a name from `--diskdefs`)
+- `--diskdefs <file>`: load additional named formats from a cpmtools `diskdefs` file
+- `--seclen`, `--tracks`, `--sectrk`, `--blocksize`, `--maxdir`, `--skew`, `--boottrk`:
+  explicit geometry override fields
+
+File/user options:
+
+- `-u, --user <0..15>`: source/filter CP/M user area
+- `--to-user <0..15>`: destination user area for `copy`/`rename`
+- `-o, --outdir <dir>`: output directory for `extract`
+
+CP/M 3 create options:
+
+- `--cpm3`: enable CP/M 3 mode for custom geometry (`fdd`/`hdd` already default to CP/M 3)
+- `--label <8.3>`: add CP/M 3 disk label marker entry
+- `--datestamp`: add CP/M 3 datestamp marker entry
 
 ### create
 
@@ -166,6 +222,56 @@ cpmdisk bootread boot.dsk boot.bin
 cpmdisk bootwrite boot.dsk boot.bin
 ```
 
+### sysgen
+
+Write CP/M system image into reserved boot/system tracks:
+
+```bash
+cpmdisk sysgen boot.dsk CPM3.SYS
+cpmdisk sysgen boot.dsk CPM3.SYS --offset-sectors 1 --keep-rest
+```
+
+Meaning of `sysgen` options:
+
+- `sys`: raw binary payload to write into reserved boot area
+- `--offset-sectors N`: start writing at boot-area sector `N` (default `0`)
+- `--keep-rest`: preserve existing boot-area bytes outside written range
+  without it, the whole boot area is zero-filled first
+
+`sysgen` validates that payload fits inside reserved boot tracks (`boottrk * sectrk * seclen`).
+
+## Typical workflows
+
+Create bootable-style image (Partner defaults):
+
+```bash
+cpmdisk create boot.dsk fdd
+cpmdisk sysgen boot.dsk CPM3.SYS
+cpmdisk add boot.dsk COMMAND.COM
+```
+
+Patch existing boot area without touching other sectors:
+
+```bash
+cpmdisk bootread boot.dsk boot-before.bin
+cpmdisk sysgen boot.dsk CPM3.SYS --offset-sectors 1 --keep-rest
+cpmdisk bootread boot.dsk boot-after.bin
+```
+
+Import/export files:
+
+```bash
+cpmdisk add boot.dsk -u 0 APP.COM
+cpmdisk extract boot.dsk -u 0 -o out 'APP.*'
+```
+
+In-image file operations:
+
+```bash
+cpmdisk copy boot.dsk APP.COM APP2.COM -u 0
+cpmdisk rename boot.dsk APP2.COM APPX.COM -u 0 --to-user 3
+```
+
 ## Geometry override options
 
 All commands support geometry overrides:
@@ -187,7 +293,7 @@ Rules:
 - `--label` and `--datestamp` require CP/M 3 mode and add CP/M 3 directory metadata entries.
 - `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
 - Named formats can come from built-ins or from a `--diskdefs` file.
-- For `info/list/add/extract/rename/copy/remove/bootread/bootwrite`: geometry is auto-detected by image size if no hint is supplied.
+- For `info/list/add/extract/rename/copy/remove/bootread/bootwrite/sysgen`: geometry is auto-detected by image size if no hint is supplied.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
 
 ## CP/M behavior notes
@@ -196,6 +302,7 @@ Rules:
 - Name part longer than 8 characters or extension longer than 3 is rejected.
 - `list` sizes are reported in CP/M record units (128-byte granularity), so small files may appear rounded up.
 - `remove` marks directory entries as deleted (`0xE5`); data blocks are reclaimed by future allocations.
+- `sysgen` writes raw bytes into reserved boot/system tracks; correct bootability depends on your platform-specific loader layout.
 
 ## cpmtools compatibility
 
@@ -213,13 +320,18 @@ Disk geometry matches cpmtools-style diskdefs. Built-in names are:
 ├── CMakeLists.txt
 ├── LICENSE
 ├── README.md
+├── include/
+│   └── cpm/
+│       ├── cpm_disk.h
+│       ├── diskdef.h
+│       └── direntry.h
+├── lib/
+│   ├── CMakeLists.txt
+│   ├── cpm_disk.cpp
+│   └── print_compat.h
 └── src/
     ├── CMakeLists.txt
     ├── main.cpp
-    ├── cpm_disk.h
-    ├── cpm_disk.cpp
-    ├── diskdef.h
-    ├── direntry.h
     └── print_compat.h
 ```
 
@@ -231,3 +343,12 @@ See [LICENSE](LICENSE).
 Third-party:
 
 - CLI11: BSD-3-Clause
+
+[language.url]: https://isocpp.org/
+[language.badge]: https://img.shields.io/badge/language-C++-blue.svg
+[standard.url]: https://en.wikipedia.org/wiki/C%2B%2B#Standardization
+[standard.badge]: https://img.shields.io/badge/C%2B%2B-23-blue.svg
+[status.url]: .
+[license.url]: LICENSE
+[license.badge]: https://img.shields.io/badge/license-GPL--2.0--only-blue.svg
+[status.badge]: https://img.shields.io/badge/status-stable-green.svg
