@@ -91,6 +91,13 @@ cpmdisk create custom.dsk \
   --blocksize 2048 --maxdir 64 --boottrk 2
 ```
 
+Use cpmtools `diskdefs` as an alternative to manual geometry:
+
+```bash
+cpmdisk create from-def.dsk myformat --diskdefs ./diskdefs
+cpmdisk info from-def.dsk -f myformat --diskdefs ./diskdefs
+```
+
 ### info
 
 Show geometry and allocation statistics.
@@ -144,6 +151,7 @@ All commands support geometry overrides:
 - `--maxdir`
 - `--skew`
 - `--boottrk`
+- `--diskdefs` (for named format lookup from a cpmtools `diskdefs` file)
 
 Rules:
 
@@ -152,6 +160,7 @@ Rules:
 - Custom geometry defaults to CP/M 2.2 mode; pass `--cpm3` to enable CP/M 3 mode.
 - `--label` and `--datestamp` require CP/M 3 mode and add CP/M 3 directory metadata entries.
 - `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
+- Named formats can come from built-ins or from a `--diskdefs` file.
 - For `info/list/add/remove`: geometry is auto-detected by image size if no hint is supplied.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
 
