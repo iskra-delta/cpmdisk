@@ -83,6 +83,84 @@ uint32_t get_ptr_block(const dir_entry& e, const disk_def& def, uint32_t i) {
     return e.al[i];
 }
 
+void set_ptr_block(dir_entry& e, const disk_def& def, uint32_t i, uint32_t blk) {
+    if (def.use_word_blocks()) {
+        e.al[i * 2]     = uint8_t(blk & 0xFFu);
+        e.al[i * 2 + 1] = uint8_t((blk >> 8) & 0xFFu);
+    } else {
+        e.al[i] = uint8_t(blk & 0xFFu);
+    }
+}
+
+// ── Directory entry layout ────────────────────────────────────────────────────
+//
+// One step of the plan that maps a file's block list onto physical directory
+// entries.  See disk_def::extent_mask(): an entry carries extents_per_entry()
+// logical 16 KB extents, `ext` is the number of the last one present and `rc`
+// counts that last extent's records.
+
+struct entry_plan {
+    uint32_t ext;          // logical extent number stored in XL/XH
+    uint8_t  rc;           // records of that last logical extent (0-128)
+    uint32_t first_block;  // index of this entry's first block in the block list
+    uint32_t block_count;  // blocks stored in this entry
+};
+
+// Split `blocks_total` blocks / `records_total` 128-byte records into entries.
+// An empty file still occupies one entry (extent 0, rc 0, no blocks).
+std::vector<entry_plan> plan_entries(const disk_def& def,
+                                     uint32_t blocks_total,
+                                     uint64_t records_total)
+{
+    const uint32_t bpe = def.blocks_per_entry();
+    const uint32_t epe = def.extents_per_entry();
+    const uint64_t rpe = uint64_t(epe) * 128u;   // records per directory entry
+
+    uint64_t count = (blocks_total + bpe - 1u) / bpe;
+    count = std::max(count, (records_total + rpe - 1u) / rpe);
+    count = std::max<uint64_t>(count, 1u);
+
+    std::vector<entry_plan> plan;
+    plan.reserve(size_t(count));
+
+    for (uint64_t k = 0; k < count; ++k) {
+        uint64_t done      = k * rpe;
+        uint64_t recs_here = records_total > done
+                           ? std::min(records_total - done, rpe) : 0u;
+        uint32_t n_ext     = std::max<uint32_t>(uint32_t((recs_here + 127u) / 128u), 1u);
+
+        uint32_t first = uint32_t(k) * bpe;
+        uint32_t cnt   = first < blocks_total ? std::min(bpe, blocks_total - first) : 0u;
+
+        plan.push_back(entry_plan{
+            .ext         = uint32_t(k) * epe + n_ext - 1u,
+            .rc          = uint8_t(recs_here - uint64_t(n_ext - 1u) * 128u),
+            .first_block = first,
+            .block_count = cnt
+        });
+    }
+    return plan;
+}
+
+// Write one planned entry into `e`, overwriting it completely.
+void emit_entry(dir_entry& e, const disk_def& def,
+                uint8_t user, const char* name8, const char* ext3,
+                const entry_plan& p, std::span<const uint32_t> blocks)
+{
+    std::memset(&e, 0, sizeof(dir_entry));
+    e.user = user;
+    std::memcpy(e.name, name8, 8);
+    std::memcpy(e.ext,  ext3,  3);
+    e.xl = uint8_t(p.ext & 0x1Fu);
+    e.xh = uint8_t((p.ext >> 5) & 0x3Fu);
+    e.rc = p.rc;
+    for (uint32_t i = 0; i < p.block_count; ++i)
+        set_ptr_block(e, def, i, blocks[p.first_block + i]);
+}
+
+// XL holds 5 bits and XH 6, so the highest encodable logical extent is 2047.
+constexpr uint32_t MAX_EXTENT_NUM = 2047u;
+
 std::string cpm_name_from_arrays(const std::array<char,8>& n, const std::array<char,3>& e) {
     std::string name(n.data(), 8);
     while (!name.empty() && name.back() == ' ') name.pop_back();
@@ -356,6 +434,18 @@ void cpm_disk::cmd_info() {
     pc::println("  Directory blocks: {}", def_.dir_blocks());
     pc::println("  Disk size       : {} ({})", def_.disk_size(), human_size(def_.disk_size()));
     pc::println("");
+    pc::println("Extents");
+    pc::println("  Block pointers  : {}-bit, {} per entry",
+        def_.use_word_blocks() ? 16 : 8, def_.ptrs_per_extent());
+    pc::println("  Extent mask EXM : {}{}", def_.extent_mask(),
+        def_.exm ? " (overridden)" : " (derived)");
+    pc::println("  Extents / entry : {} x 16 KB", def_.extents_per_entry());
+    pc::println("  Blocks / entry  : {}", def_.blocks_per_entry());
+    if (!def_.extent_geometry_ok())
+        pc::println("  WARNING: one entry holds only {} bytes, less than a 16 KB logical\n"
+                    "           extent - this is not a valid CP/M geometry.",
+            uint64_t(def_.ptrs_per_extent()) * def_.blocksize);
+    pc::println("");
     pc::println("Directory");
     pc::println("  Capacity        : {} entries", def_.maxdir);
     pc::println("  Used (files)    : {}", file_dir);
@@ -423,11 +513,16 @@ void cpm_disk::add_cpm_file(const std::array<char,8>& cpm_name,
                             const std::array<char,3>& cpm_ext,
                             std::span<const uint8_t> data,
                             int user) {
-    uint64_t file_size = data.size();
-    uint32_t bpe            = def_.blocks_per_extent();
-    uint32_t blocks_needed  = uint32_t((file_size + def_.blocksize - 1) / def_.blocksize);
-    uint32_t extents_needed = (blocks_needed == 0) ? 1u
-                            : (blocks_needed + bpe - 1) / bpe;
+    uint64_t file_size     = data.size();
+    uint32_t blocks_needed = uint32_t((file_size + def_.blocksize - 1) / def_.blocksize);
+    uint64_t records_total = (file_size + 127u) / 128u;
+
+    // One physical directory entry per extents_per_entry() logical extents.
+    auto plan = plan_entries(def_, blocks_needed, records_total);
+    if (plan.back().ext > MAX_EXTENT_NUM)
+        throw std::runtime_error(std::format(
+            "file needs logical extent {}, but CP/M encodes at most {}",
+            plan.back().ext, MAX_EXTENT_NUM));
 
     auto dir  = read_dir();
     auto used = used_blocks(dir);
@@ -439,9 +534,9 @@ void cpm_disk::add_cpm_file(const std::array<char,8>& cpm_name,
 
     uint32_t free_entries = 0;
     for (const auto& e : dir) if (entry_is_free(e)) ++free_entries;
-    if (extents_needed > free_entries)
+    if (plan.size() > free_entries)
         throw std::runtime_error(std::format(
-            "need {} directory entries, only {} free", extents_needed, free_entries));
+            "need {} directory entries, only {} free", plan.size(), free_entries));
 
     std::vector<uint32_t> alloc(blocks_needed);
     for (auto& blk : alloc) blk = alloc_block(used);
@@ -456,39 +551,13 @@ void cpm_disk::add_cpm_file(const std::array<char,8>& cpm_name,
         write_block(alloc[i], buf);
     }
 
-    uint32_t ext_idx      = 0;
-    uint32_t blocks_done  = 0;
-    uint64_t bytes_left   = file_size;
-
+    size_t step = 0;
     for (auto& e : dir) {
         if (!entry_is_free(e)) continue;
-        if (ext_idx >= extents_needed) break;
-
-        std::memset(&e, 0, sizeof(dir_entry));
-        e.user = uint8_t(user);
-        std::memcpy(e.name, cpm_name.data(), 8);
-        std::memcpy(e.ext,  cpm_ext.data(),  3);
-        e.xl = uint8_t(ext_idx & 0x1Fu);
-        e.xh = uint8_t((ext_idx >> 5) & 0x3Fu);
-
-        uint32_t blks_this = std::min(bpe, blocks_needed - blocks_done);
-        if (def_.use_word_blocks()) {
-            for (uint32_t i = 0; i < blks_this; ++i) {
-                uint16_t bn = uint16_t(alloc[blocks_done + i]);
-                e.al[i * 2] = uint8_t(bn & 0xFFu);
-                e.al[i * 2 + 1] = uint8_t(bn >> 8);
-            }
-        } else {
-            for (uint32_t i = 0; i < blks_this; ++i)
-                e.al[i] = uint8_t(alloc[blocks_done + i] & 0xFFu);
-        }
-
-        uint64_t extent_bytes = std::min(uint64_t(blks_this) * def_.blocksize, bytes_left);
-        e.rc = uint8_t((extent_bytes + 127u) / 128u);
-
-        blocks_done += blks_this;
-        bytes_left  -= extent_bytes;
-        ++ext_idx;
+        if (step >= plan.size()) break;
+        emit_entry(e, def_, uint8_t(user), cpm_name.data(), cpm_ext.data(),
+                   plan[step], alloc);
+        ++step;
     }
 
     write_dir(dir);
@@ -828,4 +897,160 @@ void cpm_disk::cmd_remove(const std::string& pattern, int user) {
         write_dir(dir);
         pc::println("Removed {} directory entr{}.", removed, removed == 1 ? "y" : "ies");
     }
+}
+
+// ── cmd_fix ───────────────────────────────────────────────────────────────────
+
+void cpm_disk::cmd_fix(bool dry_run) {
+    auto dir = read_dir();
+
+    // Every directory entry of one file, keyed by user area plus the 8.3 name
+    // with the attribute bits masked off, so that a R/O or SYS flag present on
+    // only some of a file's entries cannot split it into two groups.
+    struct group {
+        uint8_t                    user{};
+        std::array<char,8>         name{};
+        std::array<char,3>         ext{};
+        std::string                display;
+        std::map<uint32_t, size_t> by_extent;  // logical extent -> directory slot
+        std::vector<size_t>        slots;      // directory slots, ascending
+        bool                       duplicate{false};
+    };
+
+    std::map<std::tuple<uint8_t, std::string>, group> groups;
+
+    for (size_t i = 0; i < dir.size(); ++i) {
+        const auto& e = dir[i];
+        if (!entry_is_valid(e)) continue;
+
+        std::string key;
+        key.reserve(11);
+        for (int k = 0; k < 8; ++k) key += char(e.name[k] & 0x7F);
+        for (int k = 0; k < 3; ++k) key += char(e.ext[k]  & 0x7F);
+
+        auto& g = groups[std::tuple{e.user, key}];
+        if (g.slots.empty()) {
+            g.user    = e.user;
+            g.display = entry_filename(e);
+            std::memcpy(g.name.data(), e.name, 8);   // keep the attribute bits
+            std::memcpy(g.ext.data(),  e.ext,  3);
+        }
+        g.slots.push_back(i);
+        if (!g.by_extent.try_emplace(extent_num(e), i).second)
+            g.duplicate = true;
+    }
+
+    // Slots we may claim when a file needs more entries than it currently has.
+    std::vector<size_t> free_slots;
+    for (size_t i = 0; i < dir.size(); ++i)
+        if (entry_is_free(dir[i])) free_slots.push_back(i);
+    size_t free_cursor = 0;
+
+    std::vector<dir_entry> next = dir;
+    size_t repaired = 0, skipped = 0, released = 0;
+
+    for (auto& [key, g] : groups) {
+        (void)key;
+
+        if (g.duplicate) {
+            pc::println("skip   {:>4}:{} - two entries claim the same logical extent",
+                unsigned(g.user), g.display);
+            ++skipped;
+            continue;
+        }
+
+        // File length in records, exactly as the BDOS derives it: the highest
+        // logical extent is full up to its own RC, every earlier one is full.
+        uint32_t max_ext  = g.by_extent.rbegin()->first;
+        const auto& last  = dir[g.by_extent.rbegin()->second];
+        uint64_t  records = uint64_t(max_ext) * 128u + last.rc;
+
+        // Block pointers in logical extent order, holes dropped.
+        std::vector<uint32_t> blocks;
+        for (const auto& [ext_no, idx] : g.by_extent) {
+            (void)ext_no;
+            const auto& e = dir[idx];
+            for (uint32_t p = 0; p < def_.ptrs_per_extent(); ++p) {
+                uint32_t b = get_ptr_block(e, def_, p);
+                if (b != 0) blocks.push_back(b);
+            }
+        }
+
+        // Repacking is only safe when the allocation matches the record count;
+        // a sparse (randomly written) file would have its blocks shifted.
+        uint64_t implied = (records * 128u + def_.blocksize - 1u) / def_.blocksize;
+        if (blocks.size() != implied) {
+            pc::println("skip   {:>4}:{} - {} block(s) allocated but EX/RC imply {}",
+                unsigned(g.user), g.display, blocks.size(), implied);
+            ++skipped;
+            continue;
+        }
+
+        auto plan = plan_entries(def_, uint32_t(blocks.size()), records);
+
+        std::vector<dir_entry> rebuilt(plan.size());
+        for (size_t k = 0; k < plan.size(); ++k) {
+            emit_entry(rebuilt[k], def_, g.user, g.name.data(), g.ext.data(),
+                       plan[k], blocks);
+            // The CP/M 3 byte count of the final record belongs on the last entry.
+            if (k + 1 == plan.size()) rebuilt[k].bc = last.bc;
+        }
+
+        // Already canonical?
+        if (rebuilt.size() == g.slots.size()) {
+            bool same = true;
+            for (size_t k = 0; same && k < rebuilt.size(); ++k)
+                same = std::memcmp(&rebuilt[k], &dir[g.slots[k]], sizeof(dir_entry)) == 0;
+            if (same) continue;
+        }
+
+        // Reuse the file's own slots first; claim free ones only if the new
+        // layout needs more entries (which happens when EXM shrinks).
+        std::vector<size_t> targets = g.slots;
+        bool room = true;
+        while (targets.size() < rebuilt.size()) {
+            if (free_cursor >= free_slots.size()) { room = false; break; }
+            targets.push_back(free_slots[free_cursor++]);
+        }
+        if (!room) {
+            pc::println("skip   {:>4}:{} - needs {} entries, directory is full",
+                unsigned(g.user), g.display, rebuilt.size());
+            ++skipped;
+            continue;
+        }
+
+        for (size_t k = 0; k < rebuilt.size(); ++k)
+            next[targets[k]] = rebuilt[k];
+        for (size_t k = rebuilt.size(); k < targets.size(); ++k) {
+            next[targets[k]].user = 0xE5;
+            ++released;
+        }
+
+        pc::println("fix    {:>4}:{} - {} entr{} -> {}", unsigned(g.user), g.display,
+            g.slots.size(), g.slots.size() == 1 ? "y" : "ies", rebuilt.size());
+        ++repaired;
+    }
+
+    if (!def_.extent_geometry_ok())
+        pc::println("WARNING: {} block pointers x {} bytes is under one 16 KB logical\n"
+                    "         extent; this geometry has no valid CP/M encoding.",
+            def_.ptrs_per_extent(), def_.blocksize);
+
+    if (repaired == 0) {
+        pc::println("Directory already matches EXM {} - nothing to repair.",
+            def_.extent_mask());
+    } else if (dry_run) {
+        pc::println("");
+        pc::println("{} file(s) would be repacked for EXM {}, freeing {} directory "
+                    "entr{} (dry run, nothing written).",
+            repaired, def_.extent_mask(), released, released == 1 ? "y" : "ies");
+    } else {
+        write_dir(next);
+        pc::println("");
+        pc::println("Repacked {} file(s) for EXM {}, freed {} directory entr{}.",
+            repaired, def_.extent_mask(), released, released == 1 ? "y" : "ies");
+    }
+
+    if (skipped > 0)
+        pc::println("{} file(s) left untouched.", skipped);
 }

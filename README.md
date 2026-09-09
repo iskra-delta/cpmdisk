@@ -28,6 +28,7 @@ Implemented commands:
 - `rename`: rename file inside image (optionally move between user areas)
 - `copy`: copy file inside image (optionally to another user area)
 - `remove`: delete by wildcard pattern (`*`, `?`)
+- `fix`: repack directory entries for the geometry's extent mask (EXM)
 - `bootread`: export reserved boot/system tracks
 - `bootwrite`: import reserved boot/system tracks
 - `sysgen`: place CP/M system image into boot/system tracks
@@ -36,10 +37,44 @@ Implemented commands:
 
 Built-in named formats:
 
-| Type | Internal name | Tracks | Sec/trk | Sector size | Block size | Max dir | Boot trk | Size |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| `fdd` | `idpfdd` | 146 | 18 | 256 | 2048 | 128 | 2 | 672,768 B |
-| `hdd` | `idphdd` | 1224 | 32 | 256 | 4096 | 1024 | 1 | 10,027,008 B |
+| Type | Internal name | Tracks | Sec/trk | Sector size | Block size | Max dir | Boot trk | Size | Machine |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `fdd`, `fdd:g` | `idpfdd` | 146 | 18 | 256 | 2048 | 128 | 2 | 672,768 B | Partner G (GDP) |
+| `fdd:p` | `idpfdd:p` | 154 | 18 | 256 | 2048 | 128 | 2 | 709,632 B | Partner P (CRT) |
+| `hdd`, `hdd:g`, `hdd:p` | `idphdd` | 1224 | 32 | 256 | 4096 | 1024 | 1 | 10,027,008 B | both |
+
+### Selecting a Partner model with `:g` / `:p`
+
+The Partner shipped two floppy media that share **every** CP/M parameter except
+the track count -- CP/M describes each physical head as a logical track, so the
+count is twice the cylinder count:
+
+- Partner G (GDP): 73 cylinders x 2 heads = 146 tracks
+- Partner P (CRT): 77 cylinders x 2 heads = 154 tracks
+
+Append `:g` or `:p` to a type name to pick one:
+
+```bash
+cpmdisk create boot.dsk fdd        # Partner G, 146 tracks (default, unchanged)
+cpmdisk create boot.dsk fdd:g      # the same disk, stated explicitly
+cpmdisk create boot.dsk fdd:p      # Partner P, 154 tracks
+```
+
+A bare `fdd` always means the Partner G medium, so adding media never changes an
+existing command line.  The suffix is case-insensitive.  Both models use the same
+10 MB hard disk, so `hdd`, `hdd:g` and `hdd:p` are one and the same drive.
+
+Size auto-detection recognises both floppies, so `-f/--format` is only needed for
+custom geometry:
+
+```bash
+cpmdisk info fdd-partner-p.img     # -> Disk type : idpfdd:p
+```
+
+Because only `DSM` differs (324 blocks against 342), the two floppy formats are
+interchangeable in practice until a disk fills past 648 KB, which is why an image
+built for one model boots happily on the other.  Beyond that point a G-format
+disk described as P lets CP/M allocate blocks that are not in the image.
 
 ## Requirements
 
@@ -99,10 +134,12 @@ Most commands also accept either:
 
 Common options (many commands):
 
-- `-f, --format <name>`: force a named geometry (`fdd`, `hdd`, or a name from `--diskdefs`)
+- `-f, --format <name>`: force a named geometry (`fdd`, `fdd:p`, `hdd`, or a name from `--diskdefs`)
 - `--diskdefs <file>`: load additional named formats from a cpmtools `diskdefs` file
 - `--seclen`, `--tracks`, `--sectrk`, `--blocksize`, `--maxdir`, `--skew`, `--boottrk`:
   explicit geometry override fields
+- `--exm <0|1|3|7|15>`: extent mask override (see [Extents and the extent mask](#extents-and-the-extent-mask));
+  omit it and the mask is derived from block size and pointer width
 
 File/user options:
 
@@ -214,6 +251,50 @@ cpmdisk remove boot.dsk '*.BAK'
 cpmdisk remove boot.dsk -u 0 '*.COM'
 ```
 
+### fix
+
+Repack every file's directory entries into the canonical layout for the disk's
+extent mask.  Safe to re-run: a directory that is already correct is reported and
+left untouched.
+
+```bash
+cpmdisk fix hdd.dsk --dry-run
+cpmdisk fix hdd.dsk
+```
+
+Use it on images written by cpmdisk **before** extent-mask support, on any format
+whose EXM is greater than 0 (`hdd`, for example).  Such images list and extract
+correctly under `cpmdisk`, but real CP/M reads their multi-extent files short --
+see [Extents and the extent mask](#extents-and-the-extent-mask).
+
+`fix` reports, per file, how many directory entries it collapsed:
+
+```text
+fix       0:BIG.BIN - 3 entries -> 2
+fix       0:HUGE.BIN - 7 entries -> 4
+
+Repacked 2 file(s) for EXM 1, freed 4 directory entries.
+```
+
+Files are left untouched, with a `skip` line, when the directory cannot be
+repacked safely: duplicate logical extent numbers, or an allocation that does not
+match the record count implied by `EX`/`RC` (a sparse, randomly written file).
+
+`fix` normalises rather than merely repairs, so it also drops the empty trailing
+extent (`RC 0`, no blocks) that CP/M leaves behind when a file ends on an exact
+extent boundary.  That is semantically neutral -- reading stops at the same byte
+either way -- but it does mean `fix` can report a change on a directory written
+by real CP/M.  Use `--dry-run` first if you want to see what it would touch.
+
+Because `fix` rebuilds from the geometry, `--exm` also lets it convert in the
+other direction, which is useful when a machine's BIOS does not follow the
+standard derivation:
+
+```bash
+cpmdisk fix hdd.dsk --exm 0     # one entry per 16 KB logical extent
+cpmdisk fix hdd.dsk             # back to the derived EXM 1
+```
+
 ### bootread / bootwrite
 
 Export or import boot/system track area:
@@ -284,6 +365,7 @@ All commands support geometry overrides:
 - `--maxdir`
 - `--skew`
 - `--boottrk`
+- `--exm` (extent mask; derived when omitted)
 - `--diskdefs` (for named format lookup from a cpmtools `diskdefs` file)
 
 Rules:
@@ -294,7 +376,8 @@ Rules:
 - `--label` and `--datestamp` require CP/M 3 mode and add CP/M 3 directory metadata entries.
 - `--datestamp` enables CP/M 3 directory metadata support used for file timestamps.
 - Named formats can come from built-ins or from a `--diskdefs` file.
-- For `info/list/add/extract/rename/copy/remove/bootread/bootwrite/sysgen`: geometry is auto-detected by image size if no hint is supplied.
+- For `info/list/add/extract/rename/copy/remove/fix/bootread/bootwrite/sysgen`: geometry is auto-detected by image size if no hint is supplied.
+- A partial set of overrides (say `--exm 1` alone) is applied on top of the auto-detected type.
 - If auto-detection fails, use `-f/--format` or pass full geometry.
 
 ## CP/M behavior notes
@@ -305,14 +388,85 @@ Rules:
 - `remove` marks directory entries as deleted (`0xE5`); data blocks are reclaimed by future allocations.
 - `sysgen` writes raw bytes into reserved boot/system tracks; correct bootability depends on your platform-specific loader layout.
 
+## Extents and the extent mask
+
+CP/M splits a file into *logical extents* of 128 records x 128 bytes = 16 KB.  A
+*physical* directory entry holds a fixed number of block pointers -- 16 one-byte
+pointers, or 8 two-byte pointers once the disk has more than 256 allocation
+blocks.  When those pointers address more than 16 KB, one directory entry carries
+several logical extents at once, and the DPB's extent mask `EXM` says how many:
+
+| Block size | Pointers per entry | Bytes per entry | Extents per entry | EXM |
+|---:|---:|---:|---:|---:|
+| 1024 | 16 x 1 byte | 16 KB | 1 | 0 |
+| 2048 | 16 x 1 byte | 32 KB | 2 | 1 |
+| 2048 | 8 x 2 bytes | 16 KB | 1 | 0 |
+| 4096 | 16 x 1 byte | 64 KB | 4 | 3 |
+| 4096 | 8 x 2 bytes | 32 KB | 2 | 1 |
+| 8192 | 8 x 2 bytes | 64 KB | 4 | 3 |
+
+In an entry that carries several logical extents, `XL`/`XH` hold the number of the
+**last** logical extent present and `RC` counts the records of that last extent;
+every earlier extent in the same entry is implicitly full.  The BDOS masks the FCB
+extent number with `EXM` before comparing it against the directory, so two entries
+whose extent numbers differ only in the masked bits are, to CP/M, the *same*
+physical extent: only the first is ever found, and everything beyond it becomes
+unreachable.  Reading such a file stops at the first entry's worth of data.
+
+Both built-in Partner formats sit on opposite sides of this:
+
+- `fdd` -- 2048-byte blocks, word pointers, 16 KB per entry: **EXM 0**, one entry
+  per logical extent.
+- `hdd` -- 4096-byte blocks, word pointers, 32 KB per entry: **EXM 1**, one entry
+  per *pair* of logical extents.
+
+`cpmdisk` derives `EXM` from the geometry, packs entries accordingly on `add` and
+`copy`, and can repack an existing directory with [`fix`](#fix).  `info` reports
+the derived value:
+
+```text
+Extents
+  Block pointers  : 16-bit, 8 per entry
+  Extent mask EXM : 1 (derived)
+  Extents / entry : 2 x 16 KB
+  Blocks / entry  : 8
+```
+
+Pass `--exm` to override the derivation for a BIOS that does not follow it.  The
+value must be one of `0`, `1`, `3`, `7`, `15`, and it changes how entries are both
+written and repacked, so it must match the machine's actual DPB.
+
+> Images written by `cpmdisk` before this was implemented store one directory
+> entry per logical extent regardless of `EXM`.  On `hdd` that makes every file
+> larger than 16 KB read short under real CP/M, while still listing and extracting
+> correctly under `cpmdisk` itself.  Run `cpmdisk fix` on such images.
+
 ## cpmtools compatibility
 
 Disk geometry matches cpmtools-style diskdefs. Built-in names are:
 
-- `idpfdd`
+- `idpfdd` (Partner G floppy; `idpfdd:p` for the Partner P floppy)
 - `idphdd`
 
 `cpmdisk` format options accept short names (`fdd`, `hdd`) and full names (`idpfdd`, `idphdd`).
+
+`diskdefs` files are read with the standard cpmtools keys (`seclen`, `tracks`,
+`sectrk`, `blocksize`, `maxdir`, `skew`, `boottrk`, `offset`).  One `cpmdisk`
+extension is recognised in addition:
+
+```text
+diskdef mymachine
+  seclen 512
+  tracks 64
+  sectrk 16
+  blocksize 4096
+  maxdir 64
+  boottrk 2
+  exm 1        # cpmdisk extension: extent mask, derived when omitted
+end
+```
+
+`exm` is unknown to cpmtools; leave it out of files you share with it.
 
 ## Project layout
 

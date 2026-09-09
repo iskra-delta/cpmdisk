@@ -10,7 +10,7 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Register all seven geometry override options on `cmd` under a named group.
+// Register all geometry override options on `cmd` under a named group.
 static void add_geo_options(CLI::App* cmd, geo_opts& g) {
     auto* grp = cmd->add_option_group("Geometry overrides",
         "Fine-tune or fully specify disk geometry (applied on top of the named type).");
@@ -21,6 +21,9 @@ static void add_geo_options(CLI::App* cmd, geo_opts& g) {
     grp->add_option("--maxdir",    g.maxdir,    "Maximum directory entries");
     grp->add_option("--skew",      g.skew,      "Sector skew factor (default 0)");
     grp->add_option("--boottrk",   g.boottrk,   "Number of reserved boot tracks");
+    grp->add_option("--exm",       g.exm,
+        "Extent mask override (0, 1, 3, 7 or 15); default is derived from geometry")
+       ->check(CLI::IsMember({0u, 1u, 3u, 7u, 15u}));
 }
 
 // Resolve the disk_def for create.
@@ -37,7 +40,8 @@ static disk_def resolve_create_def(const std::string& type,
         auto opt = find_diskdef(type, diskdefs_path);
         if (!opt)
             throw std::runtime_error(std::format(
-                "unknown disk type '{}' – use built-ins ('fdd','hdd') or a name from --diskdefs",
+                "unknown disk type '{}' – use a built-in ('fdd', 'fdd:g', 'fdd:p', 'hdd') "
+                "or a name from --diskdefs",
                 type));
         def = *opt;
     } else if (geo.all_required()) {
@@ -52,14 +56,15 @@ static disk_def resolve_create_def(const std::string& type,
 }
 
 static bool is_partner_type(std::string_view type) {
-    return type == "fdd" || type == "hdd" || type == "idpfdd" || type == "idphdd";
+    return is_builtin_diskdef(type);
 }
 
 // Resolve the optional disk_def hint for open commands.
 // Returns nullopt to trigger size-based auto-detection when nothing is specified.
 static std::optional<disk_def> resolve_open_hint(const std::string& fmt,
                                                  const geo_opts& geo,
-                                                 const std::string& diskdefs_file) {
+                                                 const std::string& diskdefs_file,
+                                                 const std::string& disk_path) {
     if (fmt.empty() && !geo.any())
         return std::nullopt;
 
@@ -72,15 +77,25 @@ static std::optional<disk_def> resolve_open_hint(const std::string& fmt,
         auto opt = find_diskdef(fmt, diskdefs_path);
         if (!opt)
             throw std::runtime_error(std::format(
-                "unknown disk type '{}' – use built-ins ('fdd','hdd') or a name from --diskdefs",
+                "unknown disk type '{}' – use a built-in ('fdd', 'fdd:g', 'fdd:p', 'hdd') "
+                "or a name from --diskdefs",
                 fmt));
         def = *opt;
-    } else {
-        if (!geo.all_required())
-            throw std::runtime_error(
-                "geometry flags given but incomplete – required: "
-                "--seclen --tracks --sectrk --blocksize --maxdir --boottrk");
+    } else if (geo.all_required()) {
         def = disk_def{"custom", 256, 0, 0, 1024, 64, 0, 0};
+    } else {
+        // Partial overrides (say --exm alone): start from the type detected by
+        // image size and adjust it, rather than demanding the full field set.
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(disk_path, ec);
+        std::optional<disk_def> opt;
+        if (!ec) opt = diskdef_by_size(sz);
+        if (!opt)
+            throw std::runtime_error(
+                "geometry flags given but incomplete, and the disk type could not be "
+                "detected from the image size – add -f/--format, or all of: "
+                "--seclen --tracks --sectrk --blocksize --maxdir --boottrk");
+        def = *opt;
     }
     geo.apply_to(def);
     return def;
@@ -107,8 +122,12 @@ int main(int argc, char* argv[]) {
         "cpmdisk - Iskra Delta Partner CP/M disk image tool\n"
         "\n"
         "Named disk types:\n"
-        "  fdd   146 tracks, 18 sec/trk, 2048-byte blocks  (655 KB)\n"
-        "  hdd   1224 tracks, 32 sec/trk, 4096-byte blocks (9.6 MB)\n"
+        "  fdd      146 tracks, 18 sec/trk, 2048-byte blocks  (Partner G floppy)\n"
+        "  fdd:p    154 tracks, 18 sec/trk, 2048-byte blocks  (Partner P floppy)\n"
+        "  hdd     1224 tracks, 32 sec/trk, 4096-byte blocks  (9.6 MB, both models)\n"
+        "\n"
+        "Append ':g' or ':p' to name a Partner model.  A bare 'fdd' is the Partner G\n"
+        "floppy, so 'fdd' and 'fdd:g' are the same disk.\n"
         "\n"
         "Any parameter can be overridden with geometry flags.\n"
         "Omit the type entirely and supply all flags for a fully custom disk.\n"
@@ -132,7 +151,7 @@ int main(int argc, char* argv[]) {
                 "--blocksize 2048 --maxdir 64 --boottrk 2");
         cmd->add_option("disk", create_path, "Output .dsk file path")->required();
         cmd->add_option("type", create_type,
-            "Base disk type (built-in fdd/hdd or from --diskdefs file)");
+            "Base disk type (built-in fdd[:g|:p]/hdd or from --diskdefs file)");
         cmd->add_option("--diskdefs", create_diskdefs,
             "Path to cpmtools diskdefs file used for type lookup");
         cmd->add_flag("--cpm3", create_cpm3,
@@ -290,6 +309,32 @@ int main(int argc, char* argv[]) {
         add_geo_options(cmd, cp_geo);
     }
 
+    // ── fix ───────────────────────────────────────────────────────────────────
+    std::string fx_path, fx_fmt;
+    bool        fx_dry = false;
+    geo_opts    fx_geo;
+    std::string fx_diskdefs;
+    {
+        auto* cmd = app.add_subcommand("fix",
+            "Repack directory entries for the geometry's extent mask (EXM).\n"
+            "On formats where one directory entry holds several 16 KB logical\n"
+            "extents (hdd has EXM 1, so two), a file must be stored as ONE entry\n"
+            "per pair.  Images written by older cpmdisk releases used one entry\n"
+            "per logical extent; CP/M folds those onto the same physical extent\n"
+            "and reads such files short.  Safe to re-run; a correct directory is\n"
+            "left untouched.\n"
+            "  cpmdisk fix hdd.dsk --dry-run\n"
+            "  cpmdisk fix hdd.dsk");
+        cmd->add_option("disk",        fx_path, "Disk image file")->required();
+        cmd->add_option("-f,--format", fx_fmt,
+            "Force disk type by name (built-in or from --diskdefs)");
+        cmd->add_option("--diskdefs", fx_diskdefs,
+            "Path to cpmtools diskdefs file used for -f/--format lookup");
+        cmd->add_flag("-n,--dry-run", fx_dry,
+            "Report what would change without writing to the image");
+        add_geo_options(cmd, fx_geo);
+    }
+
     // ── bootread / bootwrite ──────────────────────────────────────────────────
     std::string br_path, br_fmt, br_out;
     geo_opts    br_geo;
@@ -366,21 +411,21 @@ int main(int argc, char* argv[]) {
         // ── info ──────────────────────────────────────────────────────────────
         else if (app.got_subcommand("info")) {
             auto disk = cpm_disk::open({info_path},
-                                       resolve_open_hint(info_fmt, info_geo, info_diskdefs));
+                                       resolve_open_hint(info_fmt, info_geo, info_diskdefs, info_path));
             disk.cmd_info();
         }
 
         // ── list ──────────────────────────────────────────────────────────────
         else if (app.got_subcommand("list")) {
             auto disk = cpm_disk::open({list_path},
-                                       resolve_open_hint(list_fmt, list_geo, list_diskdefs));
+                                       resolve_open_hint(list_fmt, list_geo, list_diskdefs, list_path));
             disk.cmd_list(list_user);
         }
 
         // ── add ───────────────────────────────────────────────────────────────
         else if (app.got_subcommand("add")) {
             auto disk = cpm_disk::open({add_path},
-                                       resolve_open_hint(add_fmt, add_geo, add_diskdefs));
+                                       resolve_open_hint(add_fmt, add_geo, add_diskdefs, add_path));
             for (const auto& f : add_files)
                 disk.cmd_add(std::filesystem::path{f}, add_user);
         }
@@ -388,7 +433,7 @@ int main(int argc, char* argv[]) {
         // ── remove ────────────────────────────────────────────────────────────
         else if (app.got_subcommand("remove")) {
             auto disk = cpm_disk::open({rm_path},
-                                       resolve_open_hint(rm_fmt, rm_geo, rm_diskdefs));
+                                       resolve_open_hint(rm_fmt, rm_geo, rm_diskdefs, rm_path));
             for (const auto& pat : rm_patterns)
                 disk.cmd_remove(pat, rm_user);
         }
@@ -396,42 +441,49 @@ int main(int argc, char* argv[]) {
         // ── extract ───────────────────────────────────────────────────────────
         else if (app.got_subcommand("extract")) {
             auto disk = cpm_disk::open({ex_path},
-                                       resolve_open_hint(ex_fmt, ex_geo, ex_diskdefs));
+                                       resolve_open_hint(ex_fmt, ex_geo, ex_diskdefs, ex_path));
             disk.cmd_extract(ex_patterns, std::filesystem::path{ex_outdir}, ex_user);
         }
 
         // ── rename ────────────────────────────────────────────────────────────
         else if (app.got_subcommand("rename")) {
             auto disk = cpm_disk::open({rn_path},
-                                       resolve_open_hint(rn_fmt, rn_geo, rn_diskdefs));
+                                       resolve_open_hint(rn_fmt, rn_geo, rn_diskdefs, rn_path));
             disk.cmd_rename(rn_src, rn_dst, rn_user, rn_to_user);
         }
 
         // ── copy ──────────────────────────────────────────────────────────────
         else if (app.got_subcommand("copy")) {
             auto disk = cpm_disk::open({cp_path},
-                                       resolve_open_hint(cp_fmt, cp_geo, cp_diskdefs));
+                                       resolve_open_hint(cp_fmt, cp_geo, cp_diskdefs, cp_path));
             disk.cmd_copy(cp_src, cp_dst, cp_user, cp_to_user);
+        }
+
+        // ── fix ───────────────────────────────────────────────────────────────
+        else if (app.got_subcommand("fix")) {
+            auto disk = cpm_disk::open({fx_path},
+                                       resolve_open_hint(fx_fmt, fx_geo, fx_diskdefs, fx_path));
+            disk.cmd_fix(fx_dry);
         }
 
         // ── bootread ──────────────────────────────────────────────────────────
         else if (app.got_subcommand("bootread")) {
             auto disk = cpm_disk::open({br_path},
-                                       resolve_open_hint(br_fmt, br_geo, br_diskdefs));
+                                       resolve_open_hint(br_fmt, br_geo, br_diskdefs, br_path));
             disk.cmd_boot_read(std::filesystem::path{br_out});
         }
 
         // ── bootwrite ─────────────────────────────────────────────────────────
         else if (app.got_subcommand("bootwrite")) {
             auto disk = cpm_disk::open({bw_path},
-                                       resolve_open_hint(bw_fmt, bw_geo, bw_diskdefs));
+                                       resolve_open_hint(bw_fmt, bw_geo, bw_diskdefs, bw_path));
             disk.cmd_boot_write(std::filesystem::path{bw_in});
         }
 
         // ── sysgen ────────────────────────────────────────────────────────────
         else if (app.got_subcommand("sysgen")) {
             auto disk = cpm_disk::open({sg_path},
-                                       resolve_open_hint(sg_fmt, sg_geo, sg_diskdefs));
+                                       resolve_open_hint(sg_fmt, sg_geo, sg_diskdefs, sg_path));
             disk.cmd_sysgen(std::filesystem::path{sg_in}, sg_offset_sectors, sg_keep_rest);
         }
 

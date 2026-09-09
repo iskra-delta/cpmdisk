@@ -80,6 +80,13 @@ public:
     // pattern (* and ? supported).  Pass user >= 0 to restrict; -1 = all.
     void cmd_remove(const std::string& pattern, int user = -1);
 
+    // Rewrite every file's directory entries in the canonical CP/M layout for
+    // this geometry's extent mask (see disk_def::extent_mask()).  Repairs images
+    // whose multi-extent files were stored as one entry per logical extent, and
+    // is a no-op on a directory that already matches.  Pass dry_run to report
+    // without touching the image.
+    void cmd_fix(bool dry_run = false);
+
     // Accessors
     const disk_def& def() const noexcept { return def_; }
 
